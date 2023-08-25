@@ -19,8 +19,8 @@
 #include "logger/Logger.h"
 #include "config_manager/ConfigManager.h"
 #include "sender/Sender.h"
-#include "profiler/LogtailAlarm.h"
-#include "profiler/LogFileProfiler.h"
+#include "monitor/LogtailAlarm.h"
+#include "monitor/LogFileProfiler.h"
 #include "app_config/AppConfig.h"
 #include "common/DynamicLibHelper.h"
 #include "common/LogtailCommonFlags.h"
@@ -52,6 +52,7 @@ LogtailPlugin::LogtailPlugin() {
     mPluginCfg["HostIP"] = LogFileProfiler::mIpAddr;
     mPluginCfg["Hostname"] = LogFileProfiler::mHostname;
     mPluginCfg["EnableTimestampNanosecond"] = BOOL_FLAG(enable_timestamp_nanosecond);
+    mPluginCfg["EnableContainerdUpperDirDetect"] = BOOL_FLAG(enable_containerd_upper_dir_detect);
 }
 
 LogtailPlugin::~LogtailPlugin() {

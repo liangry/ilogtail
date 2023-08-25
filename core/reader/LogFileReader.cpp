@@ -35,8 +35,8 @@
 #include "logger/Logger.h"
 #include "checkpoint/CheckPointManager.h"
 #include "checkpoint/CheckpointManagerV2.h"
-#include "profiler/LogtailAlarm.h"
-#include "profiler/LogFileProfiler.h"
+#include "monitor/LogtailAlarm.h"
+#include "monitor/LogFileProfiler.h"
 #include "event_handler/LogInput.h"
 #include "app_config/AppConfig.h"
 #include "config_manager/ConfigManager.h"
@@ -66,28 +66,28 @@ DEFINE_FLAG_INT32(force_release_deleted_file_fd_timeout,
 namespace logtail {
 
 #define COMMON_READER_INFO \
-    ("project", mProjectName)("logstore", mCategory)("config", mConfigName)("log reader queue name", mLogPath)( \
+    ("project", mProjectName)("logstore", mCategory)("config", mConfigName)("log reader queue name", mHostLogPath)( \
         "file device", mDevInode.dev)("file inode", mDevInode.inode)("file signature", mLastFileSignatureHash)
 
 size_t LogFileReader::BUFFER_SIZE = 1024 * 512; // 512KB
 
 void LogFileReader::DumpMetaToMem(bool checkConfigFlag) {
     if (checkConfigFlag) {
-        size_t index = mLogPath.rfind(PATH_SEPARATOR);
-        if (index == string::npos || index == mLogPath.size() - 1) {
+        size_t index = mHostLogPath.rfind(PATH_SEPARATOR);
+        if (index == string::npos || index == mHostLogPath.size() - 1) {
             LOG_INFO(sLogger,
                      ("skip dump reader meta", "invalid log reader queue name")("project", mProjectName)(
-                         "logstore", mCategory)("config", mConfigName)("log reader queue name", mLogPath)(
+                         "logstore", mCategory)("config", mConfigName)("log reader queue name", mHostLogPath)(
                          "file device", ToString(mDevInode.dev))("file inode", ToString(mDevInode.inode))("file signature",
                                                                                       mLastFileSignatureHash));
             return;
         }
-        string dirPath = mLogPath.substr(0, index);
-        string fileName = mLogPath.substr(index + 1, mLogPath.size() - index - 1);
+        string dirPath = mHostLogPath.substr(0, index);
+        string fileName = mHostLogPath.substr(index + 1, mHostLogPath.size() - index - 1);
         if (ConfigManager::GetInstance()->FindBestMatch(dirPath, fileName) == NULL) {
             LOG_INFO(sLogger,
                      ("skip dump reader meta", "no config matches the file path")("project", mProjectName)(
-                         "logstore", mCategory)("config", mConfigName)("log reader queue name", mLogPath)(
+                         "logstore", mCategory)("config", mConfigName)("log reader queue name", mHostLogPath)(
                          "file device", ToString(mDevInode.dev))("file inode", ToString(mDevInode.inode))("file signature",
                                                                                       mLastFileSignatureHash));
             return;
@@ -95,11 +95,11 @@ void LogFileReader::DumpMetaToMem(bool checkConfigFlag) {
         LOG_INFO(
             sLogger,
             ("dump log reader meta, project", mProjectName)("logstore", mCategory)("config", mConfigName)(
-                "log reader queue name", mLogPath)("file device", ToString(mDevInode.dev))("file inode", ToString(mDevInode.inode))(
+                "log reader queue name", mHostLogPath)("file device", ToString(mDevInode.dev))("file inode", ToString(mDevInode.inode))(
                 "file signature", mLastFileSignatureHash)("real file path", mRealLogPath)("file size", mLastFileSize)(
                 "last file position", mLastFilePos)("is file opened", ToString(mLogFileOp.IsOpen())));
     }
-    CheckPoint* checkPointPtr = new CheckPoint(mLogPath,
+    CheckPoint* checkPointPtr = new CheckPoint(mHostLogPath,
                                                mLastFilePos,
                                                mLastFileSignatureSize,
                                                mLastFileSignatureHash,
@@ -135,7 +135,7 @@ bool LogFileReader::ShouldForceReleaseDeletedFileFd() {
 }
 
 void LogFileReader::InitReader(bool tailExisted, FileReadPolicy policy, uint32_t eoConcurrency) {
-    string buffer = LogFileProfiler::mIpAddr + "_" + mLogPath + "_" + CalculateRandomUUID();
+    string buffer = LogFileProfiler::mIpAddr + "_" + mHostLogPath + "_" + CalculateRandomUUID();
     uint64_t cityHash = CityHash64(buffer.c_str(), buffer.size());
     mSourceId = ToHexString(cityHash);
 
@@ -154,7 +154,7 @@ void LogFileReader::InitReader(bool tailExisted, FileReadPolicy policy, uint32_t
             LOG_INFO(
                 sLogger,
                 ("recover log reader status from checkpoint, project", mProjectName)("logstore", mCategory)(
-                    "config", mConfigName)("log reader queue name", mLogPath)("file device", ToString(mDevInode.dev))(
+                    "config", mConfigName)("log reader queue name", mHostLogPath)("file device", ToString(mDevInode.dev))(
                     "file inode", ToString(mDevInode.inode))("file signature", mLastFileSignatureHash)(
                     "real file path", mRealLogPath)("file size", mLastFileSize)("last file position", mLastFilePos));
             // check if we should skip first modify
@@ -233,8 +233,8 @@ void LogFileReader::initExactlyOnce(uint32_t concurrency) {
         primaryCpt.set_sig_hash(mLastFileSignatureHash);
         primaryCpt.set_sig_size(mLastFileSignatureSize);
         primaryCpt.set_config_name(mConfigName);
-        primaryCpt.set_log_path(mLogPath);
-        primaryCpt.set_real_path(mRealLogPath.empty() ? mLogPath : mRealLogPath);
+        primaryCpt.set_log_path(mHostLogPath);
+        primaryCpt.set_real_path(mRealLogPath.empty() ? mHostLogPath : mRealLogPath);
         primaryCpt.set_dev(mDevInode.dev);
         primaryCpt.set_inode(mDevInode.inode);
         detail::updatePrimaryCheckpoint(mEOOption->primaryCheckpointKey, primaryCpt, "all (new)");
@@ -411,8 +411,8 @@ void LogFileReader::updatePrimaryCheckpointRealPath() {
 
 LogFileReader::LogFileReader(const string& projectName,
                              const string& category,
-                             const string& logPathDir,
-                             const std::string& logPathFile,
+                             const string& hostLogPathDir,
+                             const std::string& hostLogPathFile,
                              int32_t tailLimit,
                              bool discardUnmatch,
                              bool dockerFileFlag) {
@@ -420,8 +420,8 @@ LogFileReader::LogFileReader(const string& projectName,
     mProjectName = projectName;
     mCategory = category;
     mTopicName = "";
-    mLogPathFile = logPathFile;
-    mLogPath = PathJoin(logPathDir, logPathFile);
+    mHostLogPathFile = hostLogPathFile;
+    mHostLogPath = PathJoin(hostLogPathDir, hostLogPathFile);
     mTailLimit = tailLimit;
     mLastFilePos = 0;
     mLastFileSize = 0;
@@ -449,8 +449,8 @@ LogFileReader::LogFileReader(const string& projectName,
 
 LogFileReader::LogFileReader(const std::string& projectName,
                              const std::string& category,
-                             const std::string& logPathDir,
-                             const std::string& logPathFile,
+                             const std::string& hostLogPathDir,
+                             const std::string& hostLogPathFile,
                              int32_t tailLimit,
                              const std::string& topicFormat,
                              const std::string& groupTopic,
@@ -460,8 +460,8 @@ LogFileReader::LogFileReader(const std::string& projectName,
     mFirstWatched = true;
     mProjectName = projectName;
     mCategory = category;
-    mLogPathFile = logPathFile;
-    mLogPath = PathJoin(logPathDir, logPathFile);
+    mHostLogPathFile = hostLogPathFile;
+    mHostLogPath = PathJoin(hostLogPathDir, hostLogPathFile);
     mTailLimit = tailLimit;
     mLastFilePos = 0;
     mLastFileSize = 0;
@@ -475,7 +475,7 @@ LogFileReader::LogFileReader(const std::string& projectName,
     } else if (lowerConfig == "group_topic")
         mTopicName = groupTopic;
     else if (!dockerFileFlag) // if docker file, wait for reset topic format
-        mTopicName = GetTopicName(topicFormat, mLogPath);
+        mTopicName = GetTopicName(topicFormat, mHostLogPath);
     mFileEncoding = fileEncoding;
     mLogBeginRegPtr = NULL;
     mDiscardUnmatch = discardUnmatch;
@@ -500,14 +500,14 @@ LogFileReader::LogFileReader(const std::string& projectName,
 }
 
 void LogFileReader::SetDockerPath(const std::string& dockerBasePath, size_t dockerReplaceSize) {
-    if (dockerReplaceSize > (size_t)0 && mLogPath.size() > dockerReplaceSize && !dockerBasePath.empty()) {
+    if (dockerReplaceSize > (size_t)0 && mHostLogPath.size() > dockerReplaceSize && !dockerBasePath.empty()) {
         if (dockerBasePath.size() == (size_t)1) {
-            mDockerPath = mLogPath.substr(dockerReplaceSize);
+            mDockerPath = mHostLogPath.substr(dockerReplaceSize);
         } else {
-            mDockerPath = dockerBasePath + mLogPath.substr(dockerReplaceSize);
+            mDockerPath = dockerBasePath + mHostLogPath.substr(dockerReplaceSize);
         }
 
-        LOG_DEBUG(sLogger, ("convert docker file path", "")("host path", mLogPath)("docker path", mDockerPath));
+        LOG_DEBUG(sLogger, ("convert docker file path", "")("host path", mHostLogPath)("docker path", mDockerPath));
     }
 }
 
@@ -516,7 +516,7 @@ void LogFileReader::SetReadFromBeginning() {
     mLastReadPos = 0;
     LOG_INFO(sLogger,
              ("force reading file from the beginning, project", mProjectName)("logstore", mCategory)(
-                 "config", mConfigName)("log reader queue name", mLogPath)("file device", ToString(mDevInode.dev))(
+                 "config", mConfigName)("log reader queue name", mHostLogPath)("file device", ToString(mDevInode.dev))(
                  "file inode", ToString(mDevInode.inode))("file signature", mLastFileSignatureHash)("file size",
                                                                                                     mLastFileSize));
     mFirstWatched = false;
@@ -691,7 +691,9 @@ int LogFileReader::ParseAllLines(
 int32_t LogFileReader::ParseTime(const char* buffer, const std::string& timeFormat) {
     struct tm tm;
     memset(&tm, 0, sizeof(tm));
-    const char* result = strptime(buffer, timeFormat.c_str(), &tm);
+    long nanosecond = 0;
+    int nanosecondLength;
+    const char* result = strptime_ns(buffer, timeFormat.c_str(), &tm, &nanosecond, &nanosecondLength);
     tm.tm_isdst = -1;
     if (result != NULL) {
         time_t logTime = mktime(&tm);
@@ -709,23 +711,23 @@ bool LogFileReader::CheckForFirstOpen(FileReadPolicy policy) {
     // we just want to set file pos, then a TEMPORARY object for LogFileOperator is needed here, not a class member
     // LogFileOperator we should open file via UpdateFilePtr, then start reading
     LogFileOperator op;
-    op.Open(mLogPath.c_str(), mIsFuseMode);
+    op.Open(mHostLogPath.c_str(), mIsFuseMode);
     if (op.IsOpen() == false) {
         mLastFilePos = 0;
         mLastReadPos = 0;
         LOG_INFO(sLogger,
                  ("force reading file from the beginning",
                   "open file failed when trying to find the start position for reading")("project", mProjectName)(
-                     "logstore", mCategory)("config", mConfigName)("log reader queue name", mLogPath)(
+                     "logstore", mCategory)("config", mConfigName)("log reader queue name", mHostLogPath)(
                      "file device", ToString(mDevInode.dev))("file inode", ToString(mDevInode.inode))(
                      "file signature", mLastFileSignatureHash)("file size", mLastFileSize));
         auto error = GetErrno();
         if (fsutil::Dir::IsENOENT(error))
             return true;
         else {
-            LOG_ERROR(sLogger, ("open log file fail", mLogPath)("errno", ErrnoToString(error)));
+            LOG_ERROR(sLogger, ("open log file fail", mHostLogPath)("errno", ErrnoToString(error)));
             LogtailAlarm::GetInstance()->SendAlarm(OPEN_LOGFILE_FAIL_ALARM,
-                                                   string("Failed to open log file: ") + mLogPath
+                                                   string("Failed to open log file: ") + mHostLogPath
                                                        + "; errono:" + ErrnoToString(error),
                                                    mProjectName,
                                                    mCategory,
@@ -746,12 +748,12 @@ bool LogFileReader::CheckForFirstOpen(FileReadPolicy policy) {
         mLastFilePos = 0;
         mLastReadPos = 0;
     } else {
-        LOG_ERROR(sLogger, ("invalid file read policy for file", mLogPath));
+        LOG_ERROR(sLogger, ("invalid file read policy for file", mHostLogPath));
         return false;
     }
     LOG_INFO(sLogger,
              ("set the starting position for reading, project", mProjectName)("logstore", mCategory)(
-                 "config", mConfigName)("log reader queue name", mLogPath)("file device", ToString(mDevInode.dev))(
+                 "config", mConfigName)("log reader queue name", mHostLogPath)("file device", ToString(mDevInode.dev))(
                  "file inode", ToString(mDevInode.inode))("file signature", mLastFileSignatureHash)("start position",
                                                                                                     mLastFilePos));
     return true;
@@ -804,7 +806,7 @@ void LogFileReader::FixLastFilePos(LogFileOperator& op, int64_t endOffset) {
     LOG_WARNING(sLogger,
                 ("no begin line found", "most likely to have parse error when reading begins")("project", mProjectName)(
                     "logstore", mCategory)("config", mConfigName)("log reader queue name",
-                                                                  mLogPath)("file device", ToString(mDevInode.dev))(
+                                                                  mHostLogPath)("file device", ToString(mDevInode.dev))(
                     "file inode", ToString(mDevInode.inode))("file signature", mLastFileSignatureHash)(
                     "search start position", mLastFilePos)("search end position", mLastFilePos + readSizeReal));
 
@@ -967,7 +969,7 @@ bool LogFileReader::ReadLog(LogBuffer*& logBuffer) {
     if (mLogFileOp.IsOpen() == false) {
         if (!ShouldForceReleaseDeletedFileFd()) {
             // should never happen
-            LOG_ERROR(sLogger, ("unknow error, log file not open", mLogPath));
+            LOG_ERROR(sLogger, ("unknow error, log file not open", mHostLogPath));
         }
         return false;
     }
@@ -1029,29 +1031,29 @@ bool LogFileReader::ReadLog(LogBuffer*& logBuffer) {
 void LogFileReader::OnOpenFileError() {
     switch (errno) {
         case ENOENT:
-            LOG_DEBUG(sLogger, ("log file not exist, probably caused by rollback", mLogPath));
+            LOG_DEBUG(sLogger, ("log file not exist, probably caused by rollback", mHostLogPath));
             break;
         case EACCES:
-            LOG_ERROR(sLogger, ("open log file fail because of permission", mLogPath));
+            LOG_ERROR(sLogger, ("open log file fail because of permission", mHostLogPath));
             LogtailAlarm::GetInstance()->SendAlarm(LOGFILE_PERMINSSION_ALARM,
-                                                   string("Failed to open log file because of permission: ") + mLogPath,
+                                                   string("Failed to open log file because of permission: ") + mHostLogPath,
                                                    mProjectName,
                                                    mCategory,
                                                    mRegion);
             break;
         case EMFILE:
-            LOG_ERROR(sLogger, ("too many open file", mLogPath));
+            LOG_ERROR(sLogger, ("too many open file", mHostLogPath));
             LogtailAlarm::GetInstance()->SendAlarm(OPEN_LOGFILE_FAIL_ALARM,
                                                    string("Failed to open log file because of : Too many open files")
-                                                       + mLogPath,
+                                                       + mHostLogPath,
                                                    mProjectName,
                                                    mCategory,
                                                    mRegion);
             break;
         default:
-            LOG_ERROR(sLogger, ("open log file fail", mLogPath)("errno", ErrnoToString(GetErrno())));
+            LOG_ERROR(sLogger, ("open log file fail", mHostLogPath)("errno", ErrnoToString(GetErrno())));
             LogtailAlarm::GetInstance()->SendAlarm(OPEN_LOGFILE_FAIL_ALARM,
-                                                   string("Failed to open log file: ") + mLogPath
+                                                   string("Failed to open log file: ") + mHostLogPath
                                                        + "; errono:" + ErrnoToString(GetErrno()),
                                                    mProjectName,
                                                    mCategory,
@@ -1076,9 +1078,9 @@ bool LogFileReader::UpdateFilePtr() {
         if (GloablFileDescriptorManager::GetInstance()->GetOpenedFilePtrSize() > INT32_FLAG(max_reader_open_files)) {
             LOG_ERROR(sLogger,
                       ("log file reader fd limit, too many open files",
-                       mLogPath)(mProjectName, mCategory)("limit", INT32_FLAG(max_reader_open_files)));
+                       mHostLogPath)(mProjectName, mCategory)("limit", INT32_FLAG(max_reader_open_files)));
             LogtailAlarm::GetInstance()->SendAlarm(OPEN_FILE_LIMIT_ALARM,
-                                                   string("Failed to open log file: ") + mLogPath
+                                                   string("Failed to open log file: ") + mHostLogPath
                                                        + " limit:" + ToString(INT32_FLAG(max_reader_open_files)),
                                                    mProjectName,
                                                    mCategory,
@@ -1088,7 +1090,7 @@ bool LogFileReader::UpdateFilePtr() {
             return false;
         }
         int32_t tryTime = 0;
-        LOG_DEBUG(sLogger, ("UpdateFilePtr open log file ", mLogPath));
+        LOG_DEBUG(sLogger, ("UpdateFilePtr open log file ", mHostLogPath));
         if (mRealLogPath.size() > 0) {
             while (tryTime++ < 5) {
                 mLogFileOp.Open(mRealLogPath.c_str(), mIsFuseMode);
@@ -1105,7 +1107,7 @@ bool LogFileReader::UpdateFilePtr() {
                 GloablFileDescriptorManager::GetInstance()->OnFileOpen(this);
                 LOG_INFO(sLogger,
                          ("open file succeeded, project", mProjectName)("logstore", mCategory)("config", mConfigName)(
-                             "log reader queue name", mLogPath)("file device", ToString(mDevInode.dev))(
+                             "log reader queue name", mHostLogPath)("file device", ToString(mDevInode.dev))(
                              "file inode", ToString(mDevInode.inode))("file signature", mLastFileSignatureHash)(
                              "real file path", mRealLogPath)("file size", mLastFileSize)("last file position",
                                                                                          mLastFilePos));
@@ -1114,7 +1116,7 @@ bool LogFileReader::UpdateFilePtr() {
                 mLogFileOp.Close();
             }
         }
-        if (mRealLogPath == mLogPath) {
+        if (mRealLogPath == mHostLogPath) {
             LOG_INFO(sLogger,
                      ("log file dev inode changed or file deleted ",
                       "prepare to delete reader or put reader into rotated map")("log path", mRealLogPath));
@@ -1122,7 +1124,7 @@ bool LogFileReader::UpdateFilePtr() {
         }
         tryTime = 0;
         while (tryTime++ < 5) {
-            mLogFileOp.Open(mLogPath.c_str(), mIsFuseMode);
+            mLogFileOp.Open(mHostLogPath.c_str(), mIsFuseMode);
             if (mLogFileOp.IsOpen() == false) {
                 usleep(100);
             } else {
@@ -1131,15 +1133,15 @@ bool LogFileReader::UpdateFilePtr() {
         }
         if (mLogFileOp.IsOpen() == false) {
             OnOpenFileError();
-            LOG_WARNING(sLogger, ("LogFileReader open log file failed", mLogPath));
+            LOG_WARNING(sLogger, ("LogFileReader open log file failed", mHostLogPath));
             return false;
         } else if (CheckDevInode()) {
-            // the mLogPath's dev inode equal to mDevInode, so real log path is mLogPath
-            mRealLogPath = mLogPath;
+            // the mHostLogPath's dev inode equal to mDevInode, so real log path is mHostLogPath
+            mRealLogPath = mHostLogPath;
             GloablFileDescriptorManager::GetInstance()->OnFileOpen(this);
             LOG_INFO(sLogger,
                      ("open file succeeded, project", mProjectName)("logstore", mCategory)("config", mConfigName)(
-                         "log reader queue name", mLogPath)("file device", ToString(mDevInode.dev))(
+                         "log reader queue name", mHostLogPath)("file device", ToString(mDevInode.dev))(
                          "file inode", ToString(mDevInode.inode))("file signature", mLastFileSignatureHash)(
                          "file size", mLastFileSize)("last file position", mLastFilePos));
             return true;
@@ -1147,7 +1149,7 @@ bool LogFileReader::UpdateFilePtr() {
             mLogFileOp.Close();
         }
         LOG_INFO(sLogger,
-                 ("log file dev inode changed or file deleted ", "prepare to delete reader")(mLogPath, mRealLogPath));
+                 ("log file dev inode changed or file deleted ", "prepare to delete reader")(mHostLogPath, mRealLogPath));
         return false;
     }
     return true;
@@ -1164,12 +1166,12 @@ bool LogFileReader::CloseTimeoutFilePtr(int32_t curTime) {
             LOG_INFO(sLogger,
                      ("close the file", "current log file has not been updated for some time and has been read")(
                          "project", mProjectName)("logstore", mCategory)("config", mConfigName)(
-                         "log reader queue name", mLogPath)("file device", ToString(mDevInode.dev))(
+                         "log reader queue name", mHostLogPath)("file device", ToString(mDevInode.dev))(
                          "file inode", ToString(mDevInode.inode))("file signature", mLastFileSignatureHash)(
                          "file size", mLastFileSize)("last file position", mLastFilePos));
             CloseFilePtr();
             // delete item in LogFileCollectOffsetIndicator map
-            LogFileCollectOffsetIndicator::GetInstance()->DeleteItem(mLogPath, mDevInode);
+            LogFileCollectOffsetIndicator::GetInstance()->DeleteItem(mHostLogPath, mDevInode);
             return true;
         }
     }
@@ -1178,9 +1180,9 @@ bool LogFileReader::CloseTimeoutFilePtr(int32_t curTime) {
 
 void LogFileReader::CloseFilePtr() {
     if (mLogFileOp.IsOpen()) {
-        LOG_DEBUG(sLogger, ("start close LogFileReader", mLogPath));
+        LOG_DEBUG(sLogger, ("start close LogFileReader", mHostLogPath));
 
-        // if mLogPath is symbolic link, then we should not update it accrding to /dev/fd/xx
+        // if mHostLogPath is symbolic link, then we should not update it accrding to /dev/fd/xx
         if (!mSymbolicLinkFlag) {
             // retrieve file path from file descriptor in order to open it later
             // this is important when file is moved when rotating
@@ -1188,7 +1190,7 @@ void LogFileReader::CloseFilePtr() {
             if (!curRealLogPath.empty()) {
                 LOG_INFO(sLogger,
                          ("update the real file path of the log reader during closing, project", mProjectName)(
-                             "logstore", mCategory)("config", mConfigName)("log reader queue name", mLogPath)(
+                             "logstore", mCategory)("config", mConfigName)("log reader queue name", mHostLogPath)(
                              "file device", ToString(mDevInode.dev))("file inode", ToString(mDevInode.inode))(
                              "file signature", mLastFileSignatureHash)("original file path",
                                                                        mRealLogPath)("new file path", curRealLogPath));
@@ -1197,7 +1199,7 @@ void LogFileReader::CloseFilePtr() {
                     updatePrimaryCheckpointRealPath();
                 }
             } else {
-                LOG_WARNING(sLogger, ("failed to get real log path", mLogPath));
+                LOG_WARNING(sLogger, ("failed to get real log path", mHostLogPath));
             }
         }
 
@@ -1205,10 +1207,10 @@ void LogFileReader::CloseFilePtr() {
             int fd = mLogFileOp.GetFd();
             LOG_WARNING(
                 sLogger,
-                ("close file ptr error:", mLogPath)("error", strerror(errno))("fd", fd)("inode", mDevInode.inode));
+                ("close file ptr error:", mHostLogPath)("error", strerror(errno))("fd", fd)("inode", mDevInode.inode));
             LogtailAlarm::GetInstance()->SendAlarm(OPEN_LOGFILE_FAIL_ALARM,
                                                    string("close file ptr error because of ") + strerror(errno)
-                                                       + ", file path: " + mLogPath + ", inode: "
+                                                       + ", file path: " + mHostLogPath + ", inode: "
                                                        + ToString(mDevInode.inode) + ", inode: " + ToString(fd),
                                                    mProjectName,
                                                    mCategory,
@@ -1227,10 +1229,10 @@ bool LogFileReader::CheckDevInode() {
     fsutil::PathStat statBuf;
     if (mLogFileOp.Stat(statBuf) != 0) {
         if (errno == ENOENT) {
-            LOG_WARNING(sLogger, ("file deleted ", "unknow error")("path", mLogPath)("fd", mLogFileOp.GetFd()));
+            LOG_WARNING(sLogger, ("file deleted ", "unknow error")("path", mHostLogPath)("fd", mLogFileOp.GetFd()));
         } else {
             LOG_WARNING(sLogger,
-                        ("get file info error, ", strerror(errno))("path", mLogPath)("fd", mLogFileOp.GetFd()));
+                        ("get file info error, ", strerror(errno))("path", mHostLogPath)("fd", mLogFileOp.GetFd()));
         }
         return false;
     } else {
@@ -1244,7 +1246,7 @@ bool LogFileReader::CheckFileSignatureAndOffset(int64_t& fileSize) {
     char firstLine[1025];
     int nbytes = mLogFileOp.Pread(firstLine, 1, 1024, 0);
     if (nbytes < 0) {
-        LOG_ERROR(sLogger, ("fail to read file", mLogPath)("nbytes", nbytes));
+        LOG_ERROR(sLogger, ("fail to read file", mHostLogPath)("nbytes", nbytes));
         return false;
     }
     firstLine[nbytes] = '\0';
@@ -1257,10 +1259,10 @@ bool LogFileReader::CheckFileSignatureAndOffset(int64_t& fileSize) {
         endSize = mLogFileOp.GetFileSize();
         LOG_WARNING(
             sLogger,
-            ("tell error", mLogPath)("inode", mDevInode.inode)("error", strerror(lastErrNo))("reopen", reopenFlag));
+            ("tell error", mHostLogPath)("inode", mDevInode.inode)("error", strerror(lastErrNo))("reopen", reopenFlag));
         LogtailAlarm::GetInstance()->SendAlarm(OPEN_LOGFILE_FAIL_ALARM,
                                                string("tell error because of ") + strerror(lastErrNo) + " file path: "
-                                                   + mLogPath + ", inode : " + ToString(mDevInode.inode),
+                                                   + mHostLogPath + ", inode : " + ToString(mDevInode.inode),
                                                mProjectName,
                                                mCategory,
                                                mRegion);
@@ -1273,7 +1275,7 @@ bool LogFileReader::CheckFileSignatureAndOffset(int64_t& fileSize) {
     mLastFileSize = endSize;
     bool sigCheckRst = CheckAndUpdateSignature(string(firstLine), mLastFileSignatureHash, mLastFileSignatureSize);
     if (!sigCheckRst) {
-        LOG_INFO(sLogger, ("Check file truncate by signature, read from begin", mLogPath));
+        LOG_INFO(sLogger, ("Check file truncate by signature, read from begin", mHostLogPath));
         mLastFilePos = 0;
         if (mEOOption) {
             updatePrimaryCheckpointSignature();
@@ -1286,10 +1288,10 @@ bool LogFileReader::CheckFileSignatureAndOffset(int64_t& fileSize) {
     if (endSize < mLastFilePos) {
         LOG_INFO(sLogger,
                  ("File signature is same but size decrease, read from now fileSize",
-                  mLogPath)(ToString(endSize), ToString(mLastFilePos))(GetProjectName(), GetCategory()));
+                  mHostLogPath)(ToString(endSize), ToString(mLastFilePos))(GetProjectName(), GetCategory()));
 
         LogtailAlarm::GetInstance()->SendAlarm(LOG_TRUNCATE_ALARM,
-                                               mLogPath
+                                               mHostLogPath
                                                    + " signature is same but size decrease, read from now fileSize "
                                                    + ToString(endSize) + " last read pos " + ToString(mLastFilePos),
                                                mProjectName,
@@ -1324,7 +1326,7 @@ void LogFileReader::ResetTopic(const std::string& topicFormat) {
         return;
     } else {
         // only reset file's topic
-        mTopicName = GetTopicName(topicFormat, mLogPath);
+        mTopicName = GetTopicName(topicFormat, mHostLogPath);
     }
 }
 
@@ -1359,7 +1361,7 @@ vector<int32_t> LogFileReader::LogSplit(char* buffer, int32_t size, int32_t& lin
                         if (LogtailAlarm::GetInstance()->IsLowLevelAlarmValid()) {
                             LOG_ERROR(sLogger,
                                     ("regex_match in LogSplit fail, exception",
-                                    exception)("project", mProjectName)("logstore", mCategory)("file", mLogPath));
+                                    exception)("project", mProjectName)("logstore", mCategory)("file", mHostLogPath));
                         }
                         LogtailAlarm::GetInstance()->SendAlarm(REGEX_MATCH_ALARM,
                                                             "regex_match in LogSplit fail:" + exception,
@@ -1391,7 +1393,7 @@ vector<int32_t> LogFileReader::LogSplit(char* buffer, int32_t size, int32_t& lin
             if (LogtailAlarm::GetInstance()->IsLowLevelAlarmValid()) {
                 LOG_ERROR(sLogger,
                           ("regex_match in LogSplit fail, exception",
-                           exception)("project", mProjectName)("logstore", mCategory)("file", mLogPath));
+                           exception)("project", mProjectName)("logstore", mCategory)("file", mHostLogPath));
             }
             LogtailAlarm::GetInstance()->SendAlarm(
                 REGEX_MATCH_ALARM, "regex_match in LogSplit fail:" + exception, mProjectName, mCategory, mRegion);
@@ -1402,7 +1404,7 @@ vector<int32_t> LogFileReader::LogSplit(char* buffer, int32_t size, int32_t& lin
 
 bool LogFileReader::ParseLogTime(const char* buffer,
                                  const boost::regex* reg,
-                                 time_t& logTime,
+                                 LogtailTime& logTime,
                                  const std::string& timeFormat,
                                  const std::string& region,
                                  const std::string& project,
@@ -1416,7 +1418,8 @@ bool LogFileReader::ParseLogTime(const char* buffer,
             // convert log time
             struct tm t;
             memset(&t, 0, sizeof(t));
-            if (strptime(timeStr.c_str(), timeFormat.c_str(), &t) == NULL) {
+            int nanosecondLength;
+            if (strptime_ns(timeStr.c_str(), timeFormat.c_str(), &t, &logTime.tv_nsec, &nanosecondLength) == NULL) {
                 LOG_ERROR(sLogger,
                           ("convert time failed, time str", timeStr)("time format", timeFormat)("project", project)(
                               "logstore", logStore)("file", logPath));
@@ -1424,7 +1427,7 @@ bool LogFileReader::ParseLogTime(const char* buffer,
             }
 
             t.tm_isdst = -1;
-            logTime = mktime(&t);
+            logTime.tv_sec = mktime(&t);
             return true;
         }
     }
@@ -1442,7 +1445,7 @@ bool LogFileReader::ParseLogTime(const char* buffer,
 
 bool LogFileReader::GetLogTimeByOffset(const char* buffer,
                                        int32_t pos,
-                                       time_t& logTime,
+                                       LogtailTime& logTime,
                                        const std::string& timeFormat,
                                        const std::string& region,
                                        const std::string& project,
@@ -1450,7 +1453,9 @@ bool LogFileReader::GetLogTimeByOffset(const char* buffer,
                                        const std::string& logPath) {
     struct tm t;
     memset(&t, 0, sizeof(t));
-    if (strptime(buffer + pos, timeFormat.c_str(), &t) == NULL) {
+    long nanosecond = 0;
+    int nanosecondLength = 0;
+    if (strptime_ns(buffer + pos, timeFormat.c_str(), &t, &nanosecond, &nanosecondLength) == NULL) {
         if (AppConfig::GetInstance()->IsLogParseAlarmValid()) {
             if (LogtailAlarm::GetInstance()->IsLowLevelAlarmValid()) {
                 LOG_WARNING(sLogger,
@@ -1463,7 +1468,7 @@ bool LogFileReader::GetLogTimeByOffset(const char* buffer,
         return false;
     }
     t.tm_isdst = -1;
-    logTime = mktime(&t);
+    logTime.tv_sec = mktime(&t);
     return true;
 }
 
@@ -1520,12 +1525,12 @@ bool LogFileReader::GetRawData(
         else if (curTime - mReadDelayTime >= INT32_FLAG(read_delay_alarm_duration)) {
             mReadDelayTime = curTime;
             LOG_WARNING(sLogger,
-                        ("read log delay", mLogPath)("fall behind bytes", delta)("file size", fileSize)("read pos",
+                        ("read log delay", mHostLogPath)("fall behind bytes", delta)("file size", fileSize)("read pos",
                                                                                                         mLastFilePos));
             LogtailAlarm::GetInstance()->SendAlarm(
                 READ_LOG_DELAY_ALARM,
                 string("fall behind ") + ToString(delta) + " bytes, file size:" + ToString(fileSize)
-                    + ", now position:" + ToString(mLastFilePos) + ", path:" + mLogPath
+                    + ", now position:" + ToString(mLastFilePos) + ", path:" + mHostLogPath
                     + ", now read log content:" + std::string(bufferptr, *size < 256 ? *size : 256),
                 mProjectName,
                 mCategory,
@@ -1537,13 +1542,13 @@ bool LogFileReader::GetRawData(
     // if delta size > mReadDelaySkipBytes, force set file pos and send alarm
     if (mReadDelaySkipBytes > 0 && delta > mReadDelaySkipBytes) {
         LOG_WARNING(sLogger,
-                    ("read log delay and force set file pos to file size", mLogPath)("fall behind bytes", delta)(
+                    ("read log delay and force set file pos to file size", mHostLogPath)("fall behind bytes", delta)(
                         "skip bytes config", mReadDelaySkipBytes)("file size", fileSize)("read pos", mLastFilePos));
         LogtailAlarm::GetInstance()->SendAlarm(
             READ_LOG_DELAY_ALARM,
             string("force set file pos to file size, fall behind ") + ToString(delta)
                 + " bytes, file size:" + ToString(fileSize) + ", now position:" + ToString(mLastFilePos)
-                + ", path:" + mLogPath + ", now read log content:" + std::string(bufferptr, *size < 256 ? *size : 256),
+                + ", path:" + mHostLogPath + ", now read log content:" + std::string(bufferptr, *size < 256 ? *size : 256),
             mProjectName,
             mCategory,
             mRegion);
@@ -1553,7 +1558,7 @@ bool LogFileReader::GetRawData(
 
     if (mMarkOffsetFlag && *size > 0) {
         fileInfo = new FileInfo(mLogFileOp.GetFd(), mDevInode);
-        fileInfo->filename = mIsFuseMode ? mFuseTrimedFilename : mLogPath;
+        fileInfo->filename = mIsFuseMode ? mFuseTrimedFilename : mHostLogPath;
         fileInfo->offset = mLastFilePos - (int64_t)(*size);
         fileInfo->len = (int64_t)(*size);
         fileInfo->filePos = mLastFilePos;
@@ -1570,11 +1575,11 @@ bool LogFileReader::GetRawData(
             && curTime - mReadStoppedContainerAlarmTime >= INT32_FLAG(logtail_alarm_interval)) {
             mReadStoppedContainerAlarmTime = curTime;
             LOG_WARNING(sLogger,
-                        ("read stopped container file", mLogPath)("stopped time", mContainerStoppedTime)(
+                        ("read stopped container file", mHostLogPath)("stopped time", mContainerStoppedTime)(
                             "file size", fileSize)("read pos", mLastFilePos));
             LogtailAlarm::GetInstance()->SendAlarm(
                 READ_STOPPED_CONTAINER_ALARM,
-                string("path: ") + mLogPath + ", stopped time:" + ToString(mContainerStoppedTime)
+                string("path: ") + mHostLogPath + ", stopped time:" + ToString(mContainerStoppedTime)
                     + ", file size:" + ToString(fileSize) + ", now position:" + ToString(mLastFilePos),
                 mProjectName,
                 mCategory,
@@ -1633,9 +1638,9 @@ void LogFileReader::ReadUTF8(char*& bufferptr, size_t* size, int64_t end, bool& 
 
     if (moreData && nbytes == 0) {
         nbytes = READ_BYTE;
-        LOG_WARNING(sLogger, ("Log is too long and forced to be split at offset: ", mLastFilePos + nbytes)("file: ", mLogPath)("inode: ", mDevInode.inode)("first 1024B log: ", std::string(bufferptr, 1024)));
+        LOG_WARNING(sLogger, ("Log is too long and forced to be split at offset: ", mLastFilePos + nbytes)("file: ", mHostLogPath)("inode: ", mDevInode.inode)("first 1024B log: ", std::string(bufferptr, 1024)));
         std::ostringstream oss;
-        oss << "Log is too long and forced to be split at offset: " << ToString(mLastFilePos + nbytes) << " file: " << mLogPath << " inode: " << ToString(mDevInode.inode) << " first 1024B log: " << std::string(bufferptr, 1024) << std::endl;
+        oss << "Log is too long and forced to be split at offset: " << ToString(mLastFilePos + nbytes) << " file: " << mHostLogPath << " inode: " << ToString(mDevInode.inode) << " first 1024B log: " << std::string(bufferptr, 1024) << std::endl;
         LogtailAlarm::GetInstance()->SendAlarm(
             SPLIT_LOG_FAIL_ALARM,
             oss.str(),
@@ -1730,9 +1735,9 @@ void LogFileReader::ReadGBK(char*& bufferptr, size_t* size, int64_t end, bool& m
     setExactlyOnceCheckpointAfterRead(*size);
     mLastFilePos += readCharCount;
     if (logTooLongSplitFlag) {
-        LOG_WARNING(sLogger, ("Log is too long and forced to be split at offset: ", mLastFilePos)("file: ", mLogPath)("inode: ", mDevInode.inode)("first 1024B log: ", std::string(bufferptr, 1024)));
+        LOG_WARNING(sLogger, ("Log is too long and forced to be split at offset: ", mLastFilePos)("file: ", mHostLogPath)("inode: ", mDevInode.inode)("first 1024B log: ", std::string(bufferptr, 1024)));
         std::ostringstream oss;
-        oss << "Log is too long and forced to be split at offset: " << ToString(mLastFilePos) << " file: " << mLogPath << " inode: " << ToString(mDevInode.inode) << " first 1024B log: " << std::string(bufferptr, 1024) << std::endl;
+        oss << "Log is too long and forced to be split at offset: " << ToString(mLastFilePos) << " file: " << mHostLogPath << " inode: " << ToString(mDevInode.inode) << " first 1024B log: " << std::string(bufferptr, 1024) << std::endl;
         LogtailAlarm::GetInstance()->SendAlarm(
             SPLIT_LOG_FAIL_ALARM,
             oss.str(),
@@ -1757,7 +1762,7 @@ LogFileReader::ReadFile(LogFileOperator& op, void* buf, size_t size, int64_t& of
         nbytes = op.SkipHoleRead(buf, 1, size, &offset);
         if (nbytes < 0) {
             LOG_ERROR(sLogger,
-                      ("SkipHoleRead fail to read log file", mLogPath)("mLastFilePos",
+                      ("SkipHoleRead fail to read log file", mHostLogPath)("mLastFilePos",
                                                                        mLastFilePos)("size", size)("offset", offset));
             return 0;
         }
@@ -1765,10 +1770,10 @@ LogFileReader::ReadFile(LogFileOperator& op, void* buf, size_t size, int64_t& of
             *truncateInfo = new TruncateInfo(oriOffset, offset);
             LOG_INFO(sLogger,
                      ("read fuse file with a hole, size",
-                      offset - oriOffset)("filename", mLogPath)("dev", mDevInode.dev)("inode", mDevInode.inode));
+                      offset - oriOffset)("filename", mHostLogPath)("dev", mDevInode.dev)("inode", mDevInode.inode));
             LogtailAlarm::GetInstance()->SendAlarm(
                 FUSE_FILE_TRUNCATE_ALARM,
-                string("read fuse file with a hole, size: ") + ToString(offset - oriOffset) + " filename: " + mLogPath
+                string("read fuse file with a hole, size: ") + ToString(offset - oriOffset) + " filename: " + mHostLogPath
                     + " dev: " + ToString(mDevInode.dev) + " inode: " + ToString(mDevInode.inode),
                 mProjectName,
                 mCategory,
@@ -1778,7 +1783,7 @@ LogFileReader::ReadFile(LogFileOperator& op, void* buf, size_t size, int64_t& of
         nbytes = op.Pread(buf, 1, size, offset);
         if (nbytes < 0) {
             LOG_ERROR(sLogger,
-                      ("Pread fail to read log file", mLogPath)("mLastFilePos", mLastFilePos)("size", size)("offset",
+                      ("Pread fail to read log file", mHostLogPath)("mLastFilePos", mLastFilePos)("size", size)("offset",
                                                                                                             offset));
             return 0;
         }
@@ -1855,7 +1860,7 @@ LogFileReader::~LogFileReader() {
     }
     LOG_INFO(sLogger,
              ("try to close the file and destruct the corresponding log reader, project",
-              mProjectName)("logstore", mCategory)("config", mConfigName)("log reader queue name", mLogPath)(
+              mProjectName)("logstore", mCategory)("config", mConfigName)("log reader queue name", mHostLogPath)(
                  "file device", ToString(mDevInode.dev))("file inode", ToString(mDevInode.inode))(
                  "file size", mLastFileSize)("file signature", mLastFileSignatureHash)("file size", mLastFileSize)(
                  "last file position", mLastFilePos));
@@ -1879,15 +1884,15 @@ void LogFileReader::UpdateReaderManual() {
     if (mLogFileOp.IsOpen()) {
         mLogFileOp.Close();
     }
-    mLogFileOp.Open(mLogPath.c_str(), mIsFuseMode);
-    mDevInode = GetFileDevInode(mLogPath);
+    mLogFileOp.Open(mHostLogPath.c_str(), mIsFuseMode);
+    mDevInode = GetFileDevInode(mHostLogPath);
 }
 #endif
 
 CommonRegLogFileReader::CommonRegLogFileReader(const std::string& projectName,
                                                const std::string& category,
-                                               const std::string& logPathDir,
-                                               const std::string& logPathFile,
+                                               const std::string& hostLogPathDir,
+                                               const std::string& hostLogPathFile,
                                                int32_t tailLimit,
                                                const std::string& timeFormat,
                                                const std::string& topicFormat,
@@ -1897,8 +1902,8 @@ CommonRegLogFileReader::CommonRegLogFileReader(const std::string& projectName,
                                                bool dockerFileFlag /* = true */)
     : LogFileReader(projectName,
                     category,
-                    logPathDir,
-                    logPathFile,
+                    hostLogPathDir,
+                    hostLogPathFile,
                     tailLimit,
                     topicFormat,
                     groupTopic,
@@ -1935,7 +1940,7 @@ bool CommonRegLogFileReader::AddUserDefinedFormat(const string& regStr, const st
 bool CommonRegLogFileReader::ParseLogLine(const char* buffer,
                                           LogGroup& logGroup,
                                           ParseLogError& error,
-                                          time_t& lastLogLineTime,
+                                          LogtailTime& lastLogLineTime,
                                           std::string& lastLogTimeStr,
                                           uint32_t& logGroupSize) {
     if (logGroup.logs_size() == 0) {
@@ -1961,20 +1966,18 @@ bool CommonRegLogFileReader::ParseLogLine(const char* buffer,
                                                 mSpecifiedYear,
                                                 mProjectName,
                                                 mRegion,
-                                                mLogPath,
+                                                mHostLogPath,
                                                 error,
                                                 logGroupSize,
                                                 mTzOffsetSecond);
         } else {
             // if "time" field not exist in user config or timeformat empty, set current system time for logs
-            timespec ts;
-            clock_gettime(CLOCK_REALTIME_COARSE, &ts);
+            LogtailTime ts = GetCurrentLogtailTime();
             if (format.mIsWholeLineMode) {
                 res = LogParser::WholeLineModeParser(buffer,
                                                      logGroup,
                                                      format.mKeys.empty() ? DEFAULT_CONTENT_KEY : format.mKeys[0],
-                                                     ts.tv_sec,
-                                                     ts.tv_nsec,
+                                                     ts,
                                                      logGroupSize);
             } else {
                 res = LogParser::RegexLogLineParser(buffer,
@@ -1983,11 +1986,10 @@ bool CommonRegLogFileReader::ParseLogLine(const char* buffer,
                                                     mDiscardUnmatch,
                                                     format.mKeys,
                                                     mCategory,
-                                                    ts.tv_sec,
-                                                    ts.tv_nsec,
+                                                    ts,
                                                     mProjectName,
                                                     mRegion,
-                                                    mLogPath,
+                                                    mHostLogPath,
                                                     error,
                                                     logGroupSize);
             }
@@ -2002,30 +2004,30 @@ bool CommonRegLogFileReader::ParseLogLine(const char* buffer,
 
 ApsaraLogFileReader::ApsaraLogFileReader(const std::string& projectName,
                                          const std::string& category,
-                                         const std::string& logPathDir,
-                                         const std::string& logPathFile,
+                                         const std::string& hostLogPathDir,
+                                         const std::string& hostLogPathFile,
                                          int32_t tailLimit,
                                          const std::string topicFormat,
                                          const std::string& groupTopic,
                                          FileEncoding fileEncoding,
                                          bool discardUnmatch,
                                          bool dockerFileFlag)
-    : LogFileReader(projectName, category, logPathDir, logPathFile, tailLimit, discardUnmatch, dockerFileFlag) {
+    : LogFileReader(projectName, category, hostLogPathDir, hostLogPathFile, tailLimit, discardUnmatch, dockerFileFlag) {
     mLogType = APSARA_LOG;
     const std::string lowerConfig = ToLowerCaseString(topicFormat);
     if (lowerConfig == "none" || lowerConfig == "customized") {
         mTopicName = "";
     } else if (lowerConfig == "default") {
-        size_t pos_dot = mLogPath.rfind("."); // the "." must be founded
-        size_t pos = mLogPath.find("@");
+        size_t pos_dot = mHostLogPath.rfind("."); // the "." must be founded
+        size_t pos = mHostLogPath.find("@");
         if (pos != std::string::npos) {
-            size_t pos_slash = mLogPath.find(PATH_SEPARATOR, pos);
+            size_t pos_slash = mHostLogPath.find(PATH_SEPARATOR, pos);
             if (pos_slash != std::string::npos) {
-                mTopicName = mLogPath.substr(0, pos) + mLogPath.substr(pos_slash, pos_dot - pos_slash);
+                mTopicName = mHostLogPath.substr(0, pos) + mHostLogPath.substr(pos_slash, pos_dot - pos_slash);
             }
         }
         if (mTopicName.empty()) {
-            mTopicName = mLogPath.substr(0, pos_dot);
+            mTopicName = mHostLogPath.substr(0, pos_dot);
         }
         std::string lowTopic = ToLowerCaseString(mTopicName);
         std::string logSuffix = ".log";
@@ -2040,14 +2042,14 @@ ApsaraLogFileReader::ApsaraLogFileReader(const std::string& projectName,
     } else if (lowerConfig == "group_topic")
         mTopicName = groupTopic;
     else
-        mTopicName = GetTopicName(topicFormat, mLogPath);
+        mTopicName = GetTopicName(topicFormat, mHostLogPath);
     mFileEncoding = fileEncoding;
 }
 
 bool ApsaraLogFileReader::ParseLogLine(const char* buffer,
                                        sls_logs::LogGroup& logGroup,
                                        ParseLogError& error,
-                                       time_t& lastLogLineTime,
+                                       LogtailTime& lastLogLineTime,
                                        std::string& lastLogTimeStr,
                                        uint32_t& logGroupSize) {
     if (logGroup.logs_size() == 0) {
@@ -2059,11 +2061,11 @@ bool ApsaraLogFileReader::ParseLogLine(const char* buffer,
                                                   logGroup,
                                                   mDiscardUnmatch,
                                                   lastLogTimeStr,
-                                                  lastLogLineTime,
+                                                  lastLogLineTime.tv_sec,
                                                   mProjectName,
                                                   mCategory,
                                                   mRegion,
-                                                  mLogPath,
+                                                  mHostLogPath,
                                                   error,
                                                   logGroupSize,
                                                   mTzOffsetSecond,

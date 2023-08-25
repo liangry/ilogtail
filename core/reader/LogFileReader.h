@@ -61,8 +61,8 @@ public:
     // for ApsaraLogFileReader
     LogFileReader(const std::string& projectName,
                   const std::string& category,
-                  const std::string& logPathDir,
-                  const std::string& logPathFile,
+                  const std::string& hostLogPathDir,
+                  const std::string& hostLogPathFile,
                   int32_t tailLimit,
                   bool discardUnmatch,
                   bool dockerFileFlag);
@@ -70,8 +70,8 @@ public:
     // for CommonRegLogFileReader, JsonLogFileReader, DelimiterLogFileReader
     LogFileReader(const std::string& projectName,
                   const std::string& category,
-                  const std::string& logPathDir,
-                  const std::string& logPathFile,
+                  const std::string& hostLogPathDir,
+                  const std::string& hostLogPathFile,
                   int32_t tailLimit,
                   const std::string& topicFormat,
                   const std::string& groupTopic,
@@ -119,13 +119,13 @@ public:
 
     std::string GetCategory() const { return mCategory; }
 
-    std::string GetLogPath() const { return mLogPath; }
+    std::string GetHostLogPath() const { return mHostLogPath; }
 
     bool GetSymbolicLinkFlag() const { return mSymbolicLinkFlag; }
 
-    std::string GetConvertedPath() const { return mDockerPath.empty() ? mLogPath : mDockerPath; }
+    std::string GetConvertedPath() const { return mDockerPath.empty() ? mHostLogPath : mDockerPath; }
 
-    std::string GetLogPathFile() const { return mLogPathFile; }
+    std::string GetHostLogPathFile() const { return mHostLogPathFile; }
 
     int64_t GetFileSize() const { return mLastFileSize; }
 
@@ -185,7 +185,7 @@ public:
     bool CheckFileSignatureAndOffset(int64_t& fileSize);
 
     void UpdateLogPath(const std::string& filePath) {
-        if (mLogPath == filePath) {
+        if (mHostLogPath == filePath) {
             return;
         }
         mRealLogPath = filePath;
@@ -228,7 +228,7 @@ public:
     virtual bool ParseLogLine(const char* buffer,
                               sls_logs::LogGroup& logGroup,
                               ParseLogError& error,
-                              time_t& lastLogLineTime,
+                              LogtailTime& lastLogLineTime,
                               std::string& lastLogTimeStr,
                               uint32_t& logGroupSize)
         = 0;
@@ -237,7 +237,7 @@ public:
     // added by xianzhi(bowen.gbw@antfin.com)
     static bool ParseLogTime(const char* buffer,
                              const boost::regex* reg,
-                             time_t& logTime,
+                             LogtailTime& logTime,
                              const std::string& timeFormat,
                              const std::string& region = "",
                              const std::string& project = "",
@@ -245,7 +245,7 @@ public:
                              const std::string& logPath = "");
     static bool GetLogTimeByOffset(const char* buffer,
                                    int32_t pos,
-                                   time_t& logTime,
+                                   LogtailTime& logTime,
                                    const std::string& timeFormat,
                                    const std::string& region = "",
                                    const std::string& project = "",
@@ -334,8 +334,8 @@ protected:
     std::string mRegion;
     std::string mCategory;
     std::string mConfigName;
-    std::string mLogPath;
-    std::string mLogPathFile;
+    std::string mHostLogPath;
+    std::string mHostLogPathFile;
     std::string mRealLogPath; // real log path
     bool mSymbolicLinkFlag = false;
     std::string mSourceId;
@@ -445,7 +445,7 @@ private:
         std::string key;
         key.append(mConfigName)
             .append("-")
-            .append(mLogPath)
+            .append(mHostLogPath)
             .append("-")
             .append(std::to_string(mDevInode.dev))
             .append("-")
@@ -537,8 +537,8 @@ class CommonRegLogFileReader : public LogFileReader {
 public:
     CommonRegLogFileReader(const std::string& projectName,
                            const std::string& category,
-                           const std::string& logPathDir,
-                           const std::string& logPathFile,
+                           const std::string& hostLogPathDir,
+                           const std::string& hostLogPathFile,
                            int32_t tailLimit,
                            const std::string& timeFormat,
                            const std::string& topicFormat,
@@ -555,7 +555,7 @@ protected:
     bool ParseLogLine(const char* buffer,
                       sls_logs::LogGroup& logGroup,
                       ParseLogError& error,
-                      time_t& lastLogLineTime,
+                      LogtailTime& lastLogLineTime,
                       std::string& lastLogTimeStr,
                       uint32_t& logGroupSize);
 
@@ -573,8 +573,8 @@ class ApsaraLogFileReader : public LogFileReader {
 public:
     ApsaraLogFileReader(const std::string& projectName,
                         const std::string& category,
-                        const std::string& logPathDir,
-                        const std::string& logPathFile,
+                        const std::string& hostLogPathDir,
+                        const std::string& hostLogPathFile,
                         int32_t tailLimit,
                         const std::string topicFormat,
                         const std::string& groupTopic = "",
@@ -586,7 +586,7 @@ private:
     bool ParseLogLine(const char* buffer,
                       sls_logs::LogGroup& logGroup,
                       ParseLogError& error,
-                      time_t& lastLogLineTime,
+                      LogtailTime& lastLogLineTime,
                       std::string& lastLogTimeStr,
                       uint32_t& logGroupSize);
 

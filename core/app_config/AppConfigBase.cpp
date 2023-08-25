@@ -19,8 +19,8 @@
 #endif
 #include "shennong/MetricSender.h"
 #include "sender/Sender.h"
-#include "profiler/LogFileProfiler.h"
-#include "profiler/LogtailAlarm.h"
+#include "monitor/LogFileProfiler.h"
+#include "monitor/LogtailAlarm.h"
 #include "monitor/Monitor.h"
 #include "common/util.h"
 #include "common/LogtailCommonFlags.h"
@@ -149,6 +149,7 @@ DECLARE_FLAG_INT32(polling_dir_first_watch_timeout);
 DECLARE_FLAG_INT32(polling_file_first_watch_timeout);
 DECLARE_FLAG_INT32(modify_check_interval);
 DECLARE_FLAG_INT32(ignore_file_modify_timeout);
+DEFINE_FLAG_STRING(host_path_blacklist, "host path matches substring in blacklist will be ignored", "");
 
 
 namespace logtail {
@@ -720,6 +721,21 @@ void AppConfigBase::LoadResourceConf(const Json::Value& confJson) {
         }
     }
 
+    if (!STRING_FLAG(host_path_blacklist).empty()) {
+#ifdef _MSC_VER
+        static const std::string delim = ";";
+#else
+        static const std::string delim = ":";
+#endif
+        auto blacklist = SplitString(TrimString(STRING_FLAG(host_path_blacklist)), delim);
+        for (const auto& s : blacklist) {
+            auto s1 = TrimString(s);
+            if (!s1.empty()) {
+                mHostPathBlacklist.emplace_back(std::move(s1));
+            }
+        }
+    }
+
     if (!LoadInt32Parameter(mSendDataPort, confJson, "data_server_port", "ALIYUN_LOGTAIL_DATA_SERVER_PORT")) {
         mSendDataPort = INT32_FLAG(data_server_port);
     }
@@ -804,15 +820,15 @@ bool AppConfigBase::CheckAndResetProxyEnv() {
         SetEnv("http_proxy", httpProxy.c_str());
     }
 
-    char* httpsProxyKey = "HTTPS_PROXY";
-    string httpsProxyValue = ToString(getenv(httpsProxyKey));
+    string httpsProxyKey = "HTTPS_PROXY";
+    string httpsProxyValue = ToString(getenv(httpsProxyKey.c_str()));
     if (httpsProxyValue.empty()) {
         httpsProxyKey = "https_proxy";
-        httpsProxyValue = ToString(getenv(httpsProxyKey));
+        httpsProxyValue = ToString(getenv(httpsProxyKey.c_str()));
     } else {
         UnsetEnv("https_proxy");
     }
-    if (!CheckAndResetProxyAddress(httpsProxyKey, httpsProxyValue)) {
+    if (!CheckAndResetProxyAddress(httpsProxyKey.c_str(), httpsProxyValue)) {
         UnsetEnv("https_proxy");
         UnsetEnv("HTTPS_PROXY");
         LOG_WARNING(sLogger,
@@ -820,15 +836,15 @@ bool AppConfigBase::CheckAndResetProxyEnv() {
         return false;
     }
 
-    char *allProxyKey = "ALL_PROXY";
-    string allProxy = ToString(getenv(allProxyKey));
+    string allProxyKey = "ALL_PROXY";
+    string allProxy = ToString(getenv(allProxyKey.c_str()));
     if (allProxy.empty()) {
-        char *allProxyKey = "all_proxy";
-        allProxy = ToString(getenv(allProxyKey));
+        allProxyKey = "all_proxy";
+        allProxy = ToString(getenv(allProxyKey.c_str()));
     } else {
         UnsetEnv("all_proxy");
     }
-    if (!CheckAndResetProxyAddress(allProxyKey, allProxy)) {
+    if (!CheckAndResetProxyAddress(allProxyKey.c_str(), allProxy)) {
         UnsetEnv("all_proxy");
         UnsetEnv("ALL_PROXY");
         LOG_WARNING(sLogger, ("proxy mode", "off")("reason", "all proxy env value not valid")("all proxy", allProxy));
@@ -1224,4 +1240,12 @@ void AppConfigBase::SetLogtailSysConfDir(const std::string& dirPath) {
                                                                                  mUserRemoteYamlConfigDirPath));
 }
 
+bool AppConfigBase::IsHostPathMatchBlacklist(const string& dirPath) const {
+    for (auto& dp : mHostPathBlacklist) {
+        if (dirPath.find(dp) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
 } // namespace logtail
