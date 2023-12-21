@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,8 @@ type FlusherElasticSearch struct {
 	HTTPConfig *HTTPConfig
 	// Worker number
 	WorkerNumber int
+	// Routing for Elasticsearch
+	Routing string
 
 	indexKeys      []string
 	isDynamicIndex bool
@@ -90,6 +93,7 @@ func NewFlusherElasticSearch() *FlusherElasticSearch {
 			Encoding: converter.EncodingJSON,
 		},
 		WorkerNumber: 8,
+		Routing:      "",
 	}
 }
 
@@ -245,8 +249,25 @@ func (f *FlusherElasticSearch) flushLogGroup(i interface{}) {
 		builder.Write(log)
 		builder.WriteString("\n")
 	}
+	routing := ""
+	if f.Routing == "time" {
+		routing = strconv.FormatInt(nowTime.UnixMilli(), 10)
+	} else if f.Routing == "file" {
+		inode := ""
+		host := ""
+		for _, tag := range logGroup.LogTags {
+			if tag.Key == "__inode__" {
+				inode = tag.Value
+			}
+			if tag.Key == "__hostname__" {
+				host = tag.Value
+			}
+		}
+		routing = fmt.Sprintf("%s@%s", inode, host)
+	}
 	req := esapi.BulkRequest{
-		Body: strings.NewReader(builder.String()),
+		Body:    strings.NewReader(builder.String()),
+		Routing: routing,
 	}
 
 	res, err := req.Do(context.Background(), f.esClient)
