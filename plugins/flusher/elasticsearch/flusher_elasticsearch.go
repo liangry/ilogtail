@@ -252,19 +252,16 @@ func (f *FlusherElasticSearch) flushLogGroup(i interface{}) {
 	routing := ""
 	if f.Routing == "time" {
 		routing = strconv.FormatInt(nowTime.UnixMilli(), 10)
-	} else if f.Routing == "file" {
-		inode := ""
-		host := ""
+	} else if f.Routing == "pack" {
 		for _, tag := range logGroup.LogTags {
-			if tag.Key == "__inode__" {
-				inode = tag.Value
-			}
-			if tag.Key == "__hostname__" {
-				host = tag.Value
+			if tag.Key == "__pack_id__" {
+				routing = tag.Value
+				break
 			}
 		}
-		routing = fmt.Sprintf("%s@%s", inode, host)
 	}
+	logger.Info(f.context.GetRuntimeContext(), "log tags", logGroup.LogTags, "serialized logcount", len(serializedLogs.([][]byte)), "routing", routing)
+
 	req := esapi.BulkRequest{
 		Body:    strings.NewReader(builder.String()),
 		Routing: routing,
