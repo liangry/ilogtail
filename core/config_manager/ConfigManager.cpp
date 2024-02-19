@@ -338,6 +338,19 @@ ConfigManager::SendHeartbeat(const AppConfig::ConfigServerAddress& configServerA
                   ("SendHeartBeat", "success")("reqBody", reqBody)("requestId", heartBeatResp.request_id())(
                       "statusCode", heartBeatResp.code()));
 
+        google::protobuf::RepeatedPtrField<configserver::proto::Command> customCommands;
+        customCommands = heartBeatResp.custom_commands();
+        if (customCommands.size() > 0) {
+            LOG_INFO(sLogger, ("receive custom commands from config server, commands number", customCommands.size()));
+            for (int i = 0; i < customCommands.size(); i++) {
+                if (customCommands[i].id() == "force_stop") {
+                    LOG_INFO(sLogger, ("force stop command found at position", i));
+                    kill(getpid(), SIGTERM);
+                    break;
+                }
+            }
+        }
+
         return heartBeatResp.pipeline_check_results();
     } catch (const sdk::LOGException& e) {
         LOG_WARNING(
