@@ -59,6 +59,7 @@ func (p *pluginv1Runner) Init(inputQueueSize int, flushQueueSize int) error {
 	p.ExtensionPlugins = make(map[string]pipeline.Extension, 0)
 	p.LogsChan = make(chan *pipeline.LogWithContext, inputQueueSize)
 	p.LogGroupsChan = make(chan *protocol.LogGroup, helper.Max(flushQueueSize, p.FlushOutStore.Len()))
+	logger.Info(p.LogstoreConfig.Context.GetRuntimeContext(), "flush queue size", flushQueueSize, "flush out store length", p.FlushOutStore.Len())
 	p.FlushOutStore.Write(p.LogGroupsChan)
 	return nil
 }

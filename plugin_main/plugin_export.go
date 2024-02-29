@@ -101,7 +101,7 @@ func LoadGlobalConfig(jsonStr string) int {
 
 //export LoadConfig
 func LoadConfig(project string, logstore string, configName string, logstoreKey int64, jsonStr string) int {
-	logger.Debug(context.Background(), "load config", configName, logstoreKey, "\n"+jsonStr)
+	logger.Info(context.Background(), "load config", configName, logstoreKey, "\n"+jsonStr)
 	if started {
 		logger.Error(context.Background(), "CONFIG_LOAD_ALARM", "cannot load config before hold on the running configs")
 		return 1

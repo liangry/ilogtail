@@ -40,35 +40,35 @@ var embeddedNamingCnt = int64(0)
 
 const mixProcessModeFlag = "mix_process_mode"
 
-type mixProcessMode int
+// type mixProcessMode int
 
-const (
-	normal mixProcessMode = iota
-	file
-	observer
-)
+// const (
+// 	normal mixProcessMode = iota
+// 	file
+// 	observer
+// )
 
-// checkMixProcessMode
-// When inputs plugins not exist, it means this LogConfig is a mixed process mode config.
-// And the default mix process mode is the file mode.
-func checkMixProcessMode(pluginCfg map[string]interface{}) mixProcessMode {
-	config, exists := pluginCfg["inputs"]
-	inputs, ok := config.([]interface{})
-	if exists && ok && len(inputs) > 0 {
-		return normal
-	}
-	mixModeFlag, mixModeFlagOk := pluginCfg[mixProcessModeFlag]
-	if !mixModeFlagOk {
-		return file
-	}
-	s := mixModeFlag.(string)
-	switch {
-	case strings.EqualFold(s, "observer"):
-		return observer
-	default:
-		return file
-	}
-}
+// // checkMixProcessMode
+// // When inputs plugins not exist, it means this LogConfig is a mixed process mode config.
+// // And the default mix process mode is the file mode.
+// func checkMixProcessMode(pluginCfg map[string]interface{}) mixProcessMode {
+// 	config, exists := pluginCfg["inputs"]
+// 	inputs, ok := config.([]interface{})
+// 	if exists && ok && len(inputs) > 0 {
+// 		return normal
+// 	}
+// 	mixModeFlag, mixModeFlagOk := pluginCfg[mixProcessModeFlag]
+// 	if !mixModeFlagOk {
+// 		return file
+// 	}
+// 	s := mixModeFlag.(string)
+// 	switch {
+// 	case strings.EqualFold(s, "observer"):
+// 		return observer
+// 	default:
+// 		return file
+// 	}
+// }
 
 type LogstoreStatistics struct {
 	CollecLatencytMetric pipeline.LatencyMetric
@@ -459,6 +459,7 @@ func createLogstoreConfig(project string, logstore string, configName string, lo
 	}
 
 	logstoreC.GlobalConfig = &config.LogtailGlobalConfig
+	logger.Info(contextImp.GetRuntimeContext(), "init global config", *logstoreC.GlobalConfig)
 	// If plugins config has "global" field, then override the logstoreC.GlobalConfig
 	if pluginConfigInterface, flag := plugins["global"]; flag || enableAlwaysOnline {
 		pluginConfig := &config.GlobalConfig{}
@@ -477,15 +478,15 @@ func createLogstoreConfig(project string, logstore string, configName string, lo
 			pluginConfig.AlwaysOnline = true
 		}
 		logstoreC.GlobalConfig = pluginConfig
-		logger.Debug(contextImp.GetRuntimeContext(), "load plugin config", *logstoreC.GlobalConfig)
+		logger.Info(contextImp.GetRuntimeContext(), "re-write global config", *logstoreC.GlobalConfig)
 	}
 
 	logQueueSize := logstoreC.GlobalConfig.DefaultLogQueueSize
-	// Because the transferred data of the file MixProcessMode is quite large, we have to limit queue size to control memory usage here.
-	if checkMixProcessMode(plugins) == file {
-		logger.Infof(contextImp.GetRuntimeContext(), "no inputs in config %v, maybe file input, limit queue size", configName)
-		logQueueSize = 10
-	}
+	// // Because the transferred data of the file MixProcessMode is quite large, we have to limit queue size to control memory usage here.
+	// if checkMixProcessMode(plugins) == file {
+	// 	logger.Infof(contextImp.GetRuntimeContext(), "no inputs in config %v, maybe file input, limit queue size", configName)
+	// 	logQueueSize = 10
+	// }
 
 	logGroupSize := logstoreC.GlobalConfig.DefaultLogGroupQueueSize
 

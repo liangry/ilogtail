@@ -219,6 +219,7 @@ bool ConfigYamlToJson::GenerateLocalJsonConfig(const string configName,
         if (!GenerateGlobalConfigForPluginCategory(configName, yamlConfig, pluginJsonConfig)) {
             return false;
         }
+        LOG_INFO(sLogger, ("global parsed json config", pluginJsonConfig.toStyledString()));
         if (!GenerateLocalJsonConfigForPluginCategory(
                 configName, workMode, PLUGIN_CATEGORY_INPUTS, yamlConfig, pluginJsonConfig, userJsonConfig)) {
             return false;
