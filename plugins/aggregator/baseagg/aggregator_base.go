@@ -17,6 +17,7 @@ package baseagg
 import (
 	"sync"
 
+	"github.com/alibaba/ilogtail/pkg/logger"
 	"github.com/alibaba/ilogtail/pkg/models"
 	"github.com/alibaba/ilogtail/pkg/pipeline"
 	"github.com/alibaba/ilogtail/pkg/protocol"
@@ -24,8 +25,9 @@ import (
 )
 
 const (
-	MaxLogCount     = 1024
-	MaxLogGroupSize = 3 * 1024 * 1024
+	DefaultMaxLogCount      = 1024
+	DefaultMaxLogGroupSize  = 3 * 1024 * 1024
+	DefaultMaxLogGroupCount = 4
 )
 
 // Other aggregators can use AggregatorBase as base aggregator.
@@ -38,8 +40,9 @@ const (
 // by AggregatorBase in your own aggregator, you should do some extra works,
 // just see the sample code in doc.go.
 type AggregatorBase struct {
-	MaxLogGroupCount int    // the maximum log group count to trigger flush operation
 	MaxLogCount      int    // the maximum log in a log group
+	MaxLogGroupSize  int    // the maximum size in bytes per log group
+	MaxLogGroupCount int    // the maximum log group count to trigger flush operation
 	PackFlag         bool   // whether to add config name as a tag
 	Topic            string // the output topic
 
@@ -62,6 +65,7 @@ func (p *AggregatorBase) Init(context pipeline.Context, que pipeline.LogGroupQue
 	if p.PackFlag {
 		p.pack = util.NewPackIDPrefix(context.GetConfigName())
 	}
+	logger.Info(p.context.GetRuntimeContext(), "AGGBASE_INIT_INFO", "max log count", p.MaxLogCount, "max log group size", p.MaxLogGroupSize, "max log group count", p.MaxLogGroupCount)
 	return 0, nil
 }
 
@@ -104,7 +108,7 @@ func (p *AggregatorBase) Add(log *protocol.Log, ctx map[string]interface{}) erro
 
 	// When current log group is full (log count or no more capacity for current log),
 	// allocate a new log group.
-	if len(nowLogGroup.Logs) >= p.MaxLogCount || p.nowLoggroupSize+logSize > MaxLogGroupSize {
+	if len(nowLogGroup.Logs) >= p.MaxLogCount || p.nowLoggroupSize+logSize > p.MaxLogGroupSize {
 		// The number of log group exceeds limit, make a quick flush.
 		if len(p.defaultLogGroup) == p.MaxLogGroupCount {
 			// try to send
@@ -207,8 +211,9 @@ func (p *AggregatorBase) GetResult(ctx pipeline.PipelineContext) error {
 func NewAggregatorBase() *AggregatorBase {
 	return &AggregatorBase{
 		defaultLogGroup:  make([]*protocol.LogGroup, 0),
-		MaxLogGroupCount: 4,
-		MaxLogCount:      MaxLogCount,
+		MaxLogCount:      DefaultMaxLogCount,
+		MaxLogGroupSize:  DefaultMaxLogGroupSize,
+		MaxLogGroupCount: DefaultMaxLogGroupCount,
 		PackFlag:         true,
 		Lock:             &sync.Mutex{},
 	}
