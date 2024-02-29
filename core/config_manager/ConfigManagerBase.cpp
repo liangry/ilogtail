@@ -1307,7 +1307,7 @@ ConfigManagerBase::ConfigManagerBase() {
     // use a thread to get uuid, work around for CalculateDmiUUID hang
     // mUUID = CalculateDmiUUID();
     mInstanceId = CalculateRandomUUID() + "_" + LogFileProfiler::mIpAddr + "_" + ToString(time(NULL));
-    mAgentId = LogFileProfiler::mIpAddr + "_" + ToString(time(NULL)) + "_" + ToString(getpid());
+    mAgentId = LogFileProfiler::mIpAddr + "_" + ToString(GetCurrentTimeInNanoSeconds()) + "_" + ToString(getpid());
     ReloadMappingConfig();
 }
 
