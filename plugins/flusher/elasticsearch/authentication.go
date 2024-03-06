@@ -63,16 +63,40 @@ func (config *Authentication) ConfigureAuthenticationAndHTTP(httpcfg *HTTPConfig
 		}
 	}
 	if httpcfg != nil {
+		if httpcfg.MaxIdleConns != 0 {
+			transport.MaxIdleConns = httpcfg.MaxIdleConns
+		} else {
+			transport.MaxIdleConns = 100
+		}
+
 		if httpcfg.MaxIdleConnsPerHost != 0 {
 			transport.MaxIdleConnsPerHost = httpcfg.MaxIdleConnsPerHost
+		} else {
+			transport.MaxIdleConnsPerHost = 4
 		}
-		if httpcfg.ResponseHeaderTimeout != "" {
-			var unit time.Duration
-			unit, err := convertTimeUnit(httpcfg.ResponseHeaderTimeout)
-			if err != nil {
-				return err
-			}
-			transport.ResponseHeaderTimeout = unit
+
+		if httpcfg.MaxConnsPerHost != 0 {
+			transport.MaxConnsPerHost = httpcfg.MaxConnsPerHost
+		} else {
+			transport.MaxConnsPerHost = 4
+		}
+
+		if httpcfg.IdleConnTimeout != 0 {
+			transport.IdleConnTimeout = time.Duration(httpcfg.IdleConnTimeout) * time.Second
+		} else {
+			transport.IdleConnTimeout = 90 * time.Second
+		}
+
+		if httpcfg.ResponseHeaderTimeout != 0 {
+			transport.ResponseHeaderTimeout = time.Duration(httpcfg.ResponseHeaderTimeout) * time.Second
+		} else {
+			transport.ResponseHeaderTimeout = 90 * time.Second
+		}
+
+		if httpcfg.WriteBufferKiloBytes != 0 {
+			transport.WriteBufferSize = httpcfg.WriteBufferKiloBytes << 10
+		} else {
+			transport.WriteBufferSize = 4096
 		}
 	}
 	opts.Transport = transport
@@ -88,22 +112,4 @@ func (plainTextConfig *PlainTextConfig) ConfigurePlaintext(opts *elasticsearch.C
 	opts.Username = plainTextConfig.Username
 	opts.Password = plainTextConfig.Password
 	return nil
-}
-
-func convertTimeUnit(unit string) (time.Duration, error) {
-	val, ok := timeUnitMap[unit]
-	if !ok {
-		return 0, fmt.Errorf("unsupported time unit: %q", unit)
-	}
-	return val, nil
-
-}
-
-var timeUnitMap = map[string]time.Duration{
-	"Nanosecond":  time.Nanosecond,
-	"Microsecond": time.Microsecond,
-	"Millisecond": time.Millisecond,
-	"Second":      time.Second,
-	"Minute":      time.Minute,
-	"Hour":        time.Hour,
 }

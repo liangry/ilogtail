@@ -18,9 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/alibaba/ilogtail/pkg/fmtstr"
@@ -32,7 +30,6 @@ import (
 	"github.com/alibaba/ilogtail/pkg/pipeline"
 	"github.com/alibaba/ilogtail/pkg/protocol"
 	converter "github.com/alibaba/ilogtail/pkg/protocol/converter"
-	"github.com/panjf2000/ants/v2"
 )
 
 type FlusherElasticSearch struct {
@@ -46,24 +43,23 @@ type FlusherElasticSearch struct {
 	Index string
 	// HTTP config
 	HTTPConfig *HTTPConfig
-	// Worker number
-	WorkerNumber int
-	// Routing for Elasticsearch
-	Routing string
+	// Flush interval in milliseconds
+	FlushIntervalMs int
 
 	indexKeys      []string
 	isDynamicIndex bool
 	context        pipeline.Context
 	converter      *converter.Converter
 	esClient       *elasticsearch.Client
-	pool           *ants.PoolWithFunc
-	wg             sync.WaitGroup
-	errs           []error
 }
 
 type HTTPConfig struct {
+	MaxIdleConns          int
 	MaxIdleConnsPerHost   int
-	ResponseHeaderTimeout string
+	MaxConnsPerHost       int
+	IdleConnTimeout       int
+	ResponseHeaderTimeout int
+	WriteBufferKiloBytes  int
 }
 
 type convertConfig struct {
@@ -92,8 +88,7 @@ func NewFlusherElasticSearch() *FlusherElasticSearch {
 			Protocol: converter.ProtocolCustomSingle,
 			Encoding: converter.EncodingJSON,
 		},
-		WorkerNumber: 8,
-		Routing:      "",
+		FlushIntervalMs: 1000,
 	}
 }
 
@@ -143,11 +138,6 @@ func (f *FlusherElasticSearch) Init(context pipeline.Context) error {
 		return err
 	}
 
-	logger.Info(f.context.GetRuntimeContext(), "FLUSHER_INIT_INFO", "flusher worker number", f.WorkerNumber)
-	f.pool, err = ants.NewPoolWithFunc(f.WorkerNumber, func(i interface{}) {
-		f.flushLogGroup(i)
-		f.wg.Done()
-	})
 	return nil
 }
 
@@ -200,90 +190,70 @@ func (f *FlusherElasticSearch) IsReady(projectName string, logstoreName string, 
 func (f *FlusherElasticSearch) SetUrgent(flag bool) {}
 
 func (f *FlusherElasticSearch) Stop() error {
-	f.pool.Release()
 	return nil
 }
 
 func (f *FlusherElasticSearch) Flush(projectName string, logstoreName string, configName string, logGroupList []*protocol.LogGroup) error {
-	f.errs = []error{}
-	for _, logGroup := range logGroupList {
-		f.wg.Add(1)
-		f.pool.Invoke(logGroup)
-	}
-	f.wg.Wait()
-
-	if len(f.errs) > 0 {
-		return f.errs[0]
-	}
+	go f.flushLogGroup(logGroupList)
+	time.Sleep(time.Millisecond * time.Duration(f.FlushIntervalMs))
 	return nil
 }
 
-func (f *FlusherElasticSearch) flushLogGroup(i interface{}) {
-	logGroup := i.(*protocol.LogGroup)
-	logger.Debug(f.context.GetRuntimeContext(), "[LogGroup] topic", logGroup.Topic, "logstore", logGroup.Category, "logcount", len(logGroup.Logs), "tags", logGroup.LogTags)
-
-	serializedLogs, values, err := f.converter.ToByteStreamWithSelectedFields(logGroup, f.indexKeys)
-	if err != nil {
-		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch convert log fail, error", err)
-		f.errs = append(f.errs, err)
-		return
-	}
-
-	var builder strings.Builder
-	nowTime := time.Now().Local()
-	for index, log := range serializedLogs.([][]byte) {
-		ESIndex := &f.Index
-		if f.isDynamicIndex {
-			valueMap := values[index]
-			ESIndex, err = fmtstr.FormatIndex(valueMap, f.Index, uint32(nowTime.Unix()))
-			if err != nil {
-				logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch format index fail, error", err)
-				f.errs = append(f.errs, err)
-				continue
-			}
+func (f *FlusherElasticSearch) flushLogGroup(logGroupList []*protocol.LogGroup) {
+	for _, logGroup := range logGroupList {
+		logger.Debug(f.context.GetRuntimeContext(), "[LogGroup] topic", logGroup.Topic, "logstore", logGroup.Category, "logcount", len(logGroup.Logs), "tags", logGroup.LogTags)
+		serializedLogs, values, err := f.converter.ToByteStreamWithSelectedFields(logGroup, f.indexKeys)
+		if err != nil {
+			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch convert log fail, error", err)
+			continue
 		}
-		builder.WriteString(`{"index": {"_index": "`)
-		builder.WriteString(*ESIndex)
-		builder.WriteString(`"}}`)
-		builder.WriteString("\n")
-		builder.Write(log)
-		builder.WriteString("\n")
-	}
-	routing := ""
-	if f.Routing == "time" {
-		routing = strconv.FormatInt(nowTime.UnixMilli(), 10)
-	} else if f.Routing == "pack" {
+
+		var builder strings.Builder
+		nowTime := time.Now().Local()
+		for index, log := range serializedLogs.([][]byte) {
+			ESIndex := &f.Index
+			if f.isDynamicIndex {
+				valueMap := values[index]
+				ESIndex, err = fmtstr.FormatIndex(valueMap, f.Index, uint32(nowTime.Unix()))
+				if err != nil {
+					logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch format index fail, error", err)
+					continue
+				}
+			}
+			builder.WriteString(`{"index": {"_index": "`)
+			builder.WriteString(*ESIndex)
+			builder.WriteString(`"}}`)
+			builder.WriteString("\n")
+			builder.Write(log)
+			builder.WriteString("\n")
+		}
+		routing := ""
 		for _, tag := range logGroup.LogTags {
 			if tag.Key == "__pack_id__" {
 				routing = tag.Value
 				break
 			}
 		}
-	}
-	logger.Info(f.context.GetRuntimeContext(), "log tags", logGroup.LogTags, "serialized logcount", len(serializedLogs.([][]byte)), "routing", routing)
+		logger.Info(f.context.GetRuntimeContext(), "log tags", logGroup.LogTags, "serialized logcount", len(serializedLogs.([][]byte)), "routing", routing)
 
-	req := esapi.BulkRequest{
-		Body:    strings.NewReader(builder.String()),
-		Routing: routing,
-	}
+		req := esapi.BulkRequest{
+			Body:    strings.NewReader(builder.String()),
+			Routing: routing,
+		}
 
-	res, err := req.Do(context.Background(), f.esClient)
-	if err != nil {
-		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail, error", err)
-		f.errs = append(f.errs, err)
-		return
-	}
+		res, err := req.Do(context.Background(), f.esClient)
+		if err != nil {
+			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail, error", err)
+			continue
+		}
 
-	if res.StatusCode >= 400 && res.StatusCode <= 499 {
-		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request client error", res)
-		err = fmt.Errorf("err status returned: %v", res.Status())
-		f.errs = append(f.errs, err)
-	} else if res.StatusCode >= 500 && res.StatusCode <= 599 {
-		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request server error", res)
-		err = fmt.Errorf("err status returned: %v", res.Status())
-		f.errs = append(f.errs, err)
+		if res.StatusCode >= 400 && res.StatusCode <= 499 {
+			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request client error", res)
+		} else if res.StatusCode >= 500 && res.StatusCode <= 599 {
+			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request server error", res)
+		}
+		res.Body.Close()
 	}
-	res.Body.Close()
 }
 
 func init() {
