@@ -279,6 +279,14 @@ ConfigManager::SendHeartbeat(const AppConfig::ConfigServerAddress& configServerA
     attributes.set_version(ILOGTAIL_VERSION);
     attributes.set_ip(LogFileProfiler::mIpAddr);
     attributes.set_hostname(LogFileProfiler::mHostname);
+
+    int32_t currentProcCpuTime = GetProcCpuTime();
+    int32_t cpuDelta = currentProcCpuTime - GetPrevProcCpuTime();
+    int32_t cpuUsage = 100 * cpuDelta / (GetClockTicks() * INT32_FLAG(config_update_interval));
+    SetPrevProcCpuTime(currentProcCpuTime);
+    (*attributes.mutable_extras())["cpu_util"] = ToString(cpuUsage);
+    (*attributes.mutable_extras())["vm_rss_kb"] = ToString(GetVmrss());
+
     heartBeatReq.mutable_attributes()->MergeFrom(attributes);
 
     google::protobuf::RepeatedPtrField<configserver::proto::AgentGroupTag> agentGroupTags;

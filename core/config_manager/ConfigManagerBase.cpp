@@ -1308,6 +1308,8 @@ ConfigManagerBase::ConfigManagerBase() {
     // mUUID = CalculateDmiUUID();
     mInstanceId = CalculateRandomUUID() + "_" + LogFileProfiler::mIpAddr + "_" + ToString(time(NULL));
     mAgentId = LogFileProfiler::mIpAddr + "_" + ToString(GetCurrentTimeInNanoSeconds()) + "_" + ToString(getpid());
+    mPrevProcCpuTime = GetProcCpuTime();
+    mClockTicks = sysconf(_SC_CLK_TCK);
     ReloadMappingConfig();
 }
 

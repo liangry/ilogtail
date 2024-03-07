@@ -144,6 +144,8 @@ protected:
     std::string mUUID;
     std::string mInstanceId;
     std::string mAgentId;
+    int32_t mPrevProcCpuTime;
+    int32_t mClockTicks;
     int32_t mProcessStartTime;
     std::atomic_int mConfigUpdateTotal{0};
     std::atomic_int mConfigUpdateItemTotal{0};
@@ -288,6 +290,40 @@ public:
 
     std::string GetInstanceId() { return mInstanceId; }
     std::string GetAgentId() { return mAgentId; }
+
+    std::int32_t GetProcCpuTime() {
+        std::ifstream proc_stat("/proc/self/stat");
+        int32_t utime, stime;
+        if (proc_stat.is_open()) {
+            std::string token;
+            for (int i = 0; i < 13; ++i) proc_stat >> token;
+            proc_stat >> utime >> stime;
+            proc_stat.close();
+        }
+        return utime + stime;
+    }
+
+    std::int32_t GetPrevProcCpuTime() { return mPrevProcCpuTime; }
+    void SetPrevProcCpuTime(int32_t procCpuTime) { mPrevProcCpuTime = procCpuTime; }
+    std::int32_t GetClockTicks() { return mClockTicks; }
+
+    std::int32_t GetVmrss() {
+        std::ifstream status_file("/proc/self/status");
+        int32_t vmrss = 0;
+        if (status_file.is_open()) {
+            std::string line;
+            while (std::getline(status_file, line)) {
+                if (line.substr(0, 6) == "VmRSS:") {
+                    std::istringstream iss(line);
+                    std::string key;
+                    iss >> key >> vmrss;
+                    break;
+                }
+            }
+            status_file.close();
+        }
+        return vmrss;
+    }
 
     void InsertAliuidSet(const std::string& aliuid);
     void SetAliuidSet(const std::vector<std::string>& aliuidList);
