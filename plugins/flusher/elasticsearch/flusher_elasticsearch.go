@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -45,12 +46,17 @@ type FlusherElasticSearch struct {
 	HTTPConfig *HTTPConfig
 	// Flush interval in milliseconds
 	FlushIntervalMs int
+	// Max flush retries if error returned
+	MaxFlushRetries int
+	// Worker number
+	WorkerNumber int
 
 	indexKeys      []string
 	isDynamicIndex bool
 	context        pipeline.Context
 	converter      *converter.Converter
 	esClient       *elasticsearch.Client
+	workerPool     chan struct{}
 }
 
 type HTTPConfig struct {
@@ -88,7 +94,9 @@ func NewFlusherElasticSearch() *FlusherElasticSearch {
 			Protocol: converter.ProtocolCustomSingle,
 			Encoding: converter.EncodingJSON,
 		},
-		FlushIntervalMs: 1000,
+		FlushIntervalMs: 2000,
+		MaxFlushRetries: 10,
+		WorkerNumber:    4,
 	}
 }
 
@@ -138,6 +146,10 @@ func (f *FlusherElasticSearch) Init(context pipeline.Context) error {
 		return err
 	}
 
+	f.workerPool = make(chan struct{}, f.WorkerNumber)
+	for i := 0; i < f.WorkerNumber; i++ {
+		f.workerPool <- struct{}{}
+	}
 	return nil
 }
 
@@ -194,8 +206,13 @@ func (f *FlusherElasticSearch) Stop() error {
 }
 
 func (f *FlusherElasticSearch) Flush(projectName string, logstoreName string, configName string, logGroupList []*protocol.LogGroup) error {
-	go f.flushLogGroup(logGroupList)
-	time.Sleep(time.Millisecond * time.Duration(f.FlushIntervalMs))
+	<-f.workerPool
+	go func() {
+		defer func() {
+			f.workerPool <- struct{}{}
+		}()
+		f.flushLogGroup(logGroupList)
+	}()
 	return nil
 }
 
@@ -241,9 +258,22 @@ func (f *FlusherElasticSearch) flushLogGroup(logGroupList []*protocol.LogGroup) 
 			Routing: routing,
 		}
 
-		res, err := req.Do(context.Background(), f.esClient)
+		var res *esapi.Response
+		for attempt := 0; attempt <= f.MaxFlushRetries; attempt++ {
+			res, err = req.Do(context.Background(), f.esClient)
+			if err != nil || res.StatusCode == 429 {
+				logger.Warning(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail or too many requests, will retry", "error", err, "status", res.StatusCode, "attempt", attempt+1)
+				if attempt < f.MaxFlushRetries {
+					time.Sleep(time.Millisecond * time.Duration(f.FlushIntervalMs*(attempt+1)))
+					req.Routing += "-retry-" + strconv.FormatInt(int64(attempt+1), 16)
+					continue
+				}
+			}
+			break
+		}
+
 		if err != nil {
-			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail, error", err)
+			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail after retries, error", err)
 			continue
 		}
 
