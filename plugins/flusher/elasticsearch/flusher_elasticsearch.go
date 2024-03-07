@@ -211,78 +211,81 @@ func (f *FlusherElasticSearch) Flush(projectName string, logstoreName string, co
 		defer func() {
 			f.workerPool <- struct{}{}
 		}()
-		f.flushLogGroup(logGroupList)
+		f.flushLogGroupList(logGroupList)
 	}()
 	return nil
 }
 
-func (f *FlusherElasticSearch) flushLogGroup(logGroupList []*protocol.LogGroup) {
+func (f *FlusherElasticSearch) flushLogGroupList(logGroupList []*protocol.LogGroup) {
 	for _, logGroup := range logGroupList {
-		logger.Debug(f.context.GetRuntimeContext(), "[LogGroup] topic", logGroup.Topic, "logstore", logGroup.Category, "logcount", len(logGroup.Logs), "tags", logGroup.LogTags)
-		serializedLogs, values, err := f.converter.ToByteStreamWithSelectedFields(logGroup, f.indexKeys)
-		if err != nil {
-			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch convert log fail, error", err)
-			continue
-		}
+		f.flushLogGroup(logGroup)
+	}
+}
 
-		var builder strings.Builder
-		nowTime := time.Now().Local()
-		for index, log := range serializedLogs.([][]byte) {
-			ESIndex := &f.Index
-			if f.isDynamicIndex {
-				valueMap := values[index]
-				ESIndex, err = fmtstr.FormatIndex(valueMap, f.Index, uint32(nowTime.Unix()))
-				if err != nil {
-					logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch format index fail, error", err)
-					continue
-				}
-			}
-			builder.WriteString(`{"index": {"_index": "`)
-			builder.WriteString(*ESIndex)
-			builder.WriteString(`"}}`)
-			builder.WriteString("\n")
-			builder.Write(log)
-			builder.WriteString("\n")
-		}
-		routing := ""
-		for _, tag := range logGroup.LogTags {
-			if tag.Key == "__pack_id__" {
-				routing = tag.Value
-				break
+func (f *FlusherElasticSearch) flushLogGroup(logGroup *protocol.LogGroup) {
+	serializedLogs, values, err := f.converter.ToByteStreamWithSelectedFields(logGroup, f.indexKeys)
+	if err != nil {
+		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch convert log fail, error", err)
+		return
+	}
+
+	var builder strings.Builder
+	nowTime := time.Now().Local()
+	for index, log := range serializedLogs.([][]byte) {
+		ESIndex := &f.Index
+		if f.isDynamicIndex {
+			valueMap := values[index]
+			ESIndex, err = fmtstr.FormatIndex(valueMap, f.Index, uint32(nowTime.Unix()))
+			if err != nil {
+				logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch format index fail, error", err)
+				continue
 			}
 		}
-		logger.Info(f.context.GetRuntimeContext(), "log tags", logGroup.LogTags, "serialized logcount", len(serializedLogs.([][]byte)), "routing", routing)
-
-		req := esapi.BulkRequest{
-			Body:    strings.NewReader(builder.String()),
-			Routing: routing,
-		}
-
-		var res *esapi.Response
-		for attempt := 0; attempt <= f.MaxFlushRetries; attempt++ {
-			res, err = req.Do(context.Background(), f.esClient)
-			if err != nil || res.StatusCode == 429 {
-				logger.Warning(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail or too many requests, will retry", "error", err, "status", res.StatusCode, "attempt", attempt+1)
-				if attempt < f.MaxFlushRetries {
-					time.Sleep(time.Millisecond * time.Duration(f.FlushIntervalMs*(attempt+1)))
-					req.Routing += "-retry-" + strconv.FormatInt(int64(attempt+1), 16)
-					continue
-				}
-			}
+		builder.WriteString(`{"index": {"_index": "`)
+		builder.WriteString(*ESIndex)
+		builder.WriteString(`"}}`)
+		builder.WriteString("\n")
+		builder.Write(log)
+		builder.WriteString("\n")
+	}
+	routing := ""
+	for _, tag := range logGroup.LogTags {
+		if tag.Key == "__pack_id__" {
+			routing = tag.Value
 			break
 		}
+	}
+	logger.Info(f.context.GetRuntimeContext(), "log tags", logGroup.LogTags, "serialized logcount", len(serializedLogs.([][]byte)), "routing", routing)
 
-		if err != nil {
-			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail after retries, error", err)
-			continue
-		}
+	req := esapi.BulkRequest{
+		Body:    strings.NewReader(builder.String()),
+		Routing: routing,
+	}
 
-		if res.StatusCode >= 400 && res.StatusCode <= 499 {
-			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request client error", res)
-		} else if res.StatusCode >= 500 && res.StatusCode <= 599 {
-			logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request server error", res)
+	var res *esapi.Response
+	for attempt := 0; attempt <= f.MaxFlushRetries; attempt++ {
+		res, err = req.Do(context.Background(), f.esClient)
+		if err != nil || res.StatusCode == 429 {
+			logger.Warning(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch error or too many requests, attempt", attempt+1)
+			if attempt < f.MaxFlushRetries {
+				time.Sleep(time.Millisecond * time.Duration(f.FlushIntervalMs*(attempt+1)))
+				req.Routing += "-retry-" + strconv.FormatInt(int64(attempt+1), 16)
+				continue
+			}
 		}
-		res.Body.Close()
+		break
+	}
+
+	if err != nil {
+		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail after retries, error", err)
+		return
+	}
+
+	defer res.Body.Close()
+	if res.StatusCode >= 400 && res.StatusCode <= 499 {
+		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request client error", res)
+	} else if res.StatusCode >= 500 && res.StatusCode <= 599 {
+		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request server error", res)
 	}
 }
 
