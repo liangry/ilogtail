@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -255,7 +254,6 @@ func (f *FlusherElasticSearch) flushLogGroup(logGroup *protocol.LogGroup) {
 			break
 		}
 	}
-	logger.Info(f.context.GetRuntimeContext(), "log tags", logGroup.LogTags, "serialized logcount", len(serializedLogs.([][]byte)), "routing", routing)
 
 	req := esapi.BulkRequest{
 		Body:    strings.NewReader(builder.String()),
@@ -263,13 +261,19 @@ func (f *FlusherElasticSearch) flushLogGroup(logGroup *protocol.LogGroup) {
 	}
 
 	var res *esapi.Response
+	var latency time.Duration
 	for attempt := 0; attempt <= f.MaxFlushRetries; attempt++ {
+		start := time.Now()
 		res, err = req.Do(context.Background(), f.esClient)
+		latency = time.Since(start)
 		if err != nil || res.StatusCode == 429 {
 			logger.Warning(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch error or too many requests, attempt", attempt+1)
 			if attempt < f.MaxFlushRetries {
 				time.Sleep(time.Millisecond * time.Duration(f.FlushIntervalMs*(attempt+1)))
-				req.Routing += "-retry-" + strconv.FormatInt(int64(attempt+1), 16)
+				req = esapi.BulkRequest{
+					Body:    strings.NewReader(builder.String()),
+					Routing: routing,
+				}
 				continue
 			}
 		}
@@ -286,6 +290,8 @@ func (f *FlusherElasticSearch) flushLogGroup(logGroup *protocol.LogGroup) {
 		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request client error", res)
 	} else if res.StatusCode >= 500 && res.StatusCode <= 599 {
 		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request server error", res)
+	} else {
+		logger.Info(f.context.GetRuntimeContext(), "log tags", logGroup.LogTags, "serialized logcount", len(serializedLogs.([][]byte)), "routing", routing, "latency", latency.Milliseconds())
 	}
 }
 
