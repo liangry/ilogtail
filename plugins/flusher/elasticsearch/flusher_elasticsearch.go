@@ -16,8 +16,11 @@ package elasticsearch
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
+	"net/http"
 	"strings"
 	"time"
 
@@ -43,10 +46,8 @@ type FlusherElasticSearch struct {
 	Index string
 	// HTTP config
 	HTTPConfig *HTTPConfig
-	// Flush interval in milliseconds
-	FlushIntervalMs int
-	// Max flush retries if error returned
-	MaxFlushRetries int
+	// Retry strategy
+	Retry retryConfig
 	// Worker number
 	WorkerNumber int
 
@@ -79,6 +80,13 @@ type convertConfig struct {
 	Encoding string
 }
 
+type retryConfig struct {
+	Enable        bool          // If enable retry, default is true
+	MaxRetryTimes int           // Max retry times, default is 10
+	InitialDelay  time.Duration // Delay time before the first retry, default is 2s
+	MaxDelay      time.Duration // max delay time when retry, default is 1000s
+}
+
 func NewFlusherElasticSearch() *FlusherElasticSearch {
 	return &FlusherElasticSearch{
 		Addresses: []string{},
@@ -93,9 +101,13 @@ func NewFlusherElasticSearch() *FlusherElasticSearch {
 			Protocol: converter.ProtocolCustomSingle,
 			Encoding: converter.EncodingJSON,
 		},
-		FlushIntervalMs: 2000,
-		MaxFlushRetries: 10,
-		WorkerNumber:    4,
+		Retry: retryConfig{
+			Enable:        true,
+			MaxRetryTimes: 10,
+			InitialDelay:  2 * time.Second,
+			MaxDelay:      1000 * time.Second,
+		},
+		WorkerNumber: 4,
 	}
 }
 
@@ -205,36 +217,59 @@ func (f *FlusherElasticSearch) Stop() error {
 }
 
 func (f *FlusherElasticSearch) Flush(projectName string, logstoreName string, configName string, logGroupList []*protocol.LogGroup) error {
-	<-f.workerPool
-	go func() {
-		defer func() {
-			f.workerPool <- struct{}{}
-		}()
-		f.flushLogGroupList(logGroupList)
-	}()
+	for _, v := range logGroupList {
+		<-f.workerPool
+		go func(logGroup *protocol.LogGroup) {
+			defer func() {
+				f.workerPool <- struct{}{}
+			}()
+			f.flushWithRetry(logGroup)
+		}(v)
+	}
 	return nil
 }
 
-func (f *FlusherElasticSearch) flushLogGroupList(logGroupList []*protocol.LogGroup) {
-	for _, logGroup := range logGroupList {
-		f.flushLogGroup(logGroup)
-	}
-}
-
-func (f *FlusherElasticSearch) flushLogGroup(logGroup *protocol.LogGroup) {
+func (f *FlusherElasticSearch) flushWithRetry(logGroup *protocol.LogGroup) error {
 	serializedLogs, values, err := f.converter.ToByteStreamWithSelectedFields(logGroup, f.indexKeys)
 	if err != nil {
 		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch convert log fail, error", err)
-		return
+		return err
+	}
+	logs := serializedLogs.([][]byte)
+	body := f.buildBody(logs, values)
+	routing := f.extractRouting(logGroup.LogTags)
+
+	attempts := 0
+	var latency time.Duration
+	for ; attempts <= f.Retry.MaxRetryTimes; attempts++ {
+		ok, retryable, e, lat := f.flushLogGroup(body, routing)
+		err = e
+		latency = lat
+		if ok || !retryable || !f.Retry.Enable || attempts == f.Retry.MaxRetryTimes {
+			break
+		}
+		wait := f.getNextRetryDelay(attempts)
+		logger.Warning(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "retryable error", err, "logcount", len(logs), "tags", logGroup.LogTags, "routing", routing, "attempts", attempts, "wait", wait)
+		time.Sleep(wait)
+	}
+	if err != nil {
+		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "non-retryable error", err, "logcount", len(logs), "tags", logGroup.LogTags, "routing", routing, "attempts", attempts)
+		return err
 	}
 
+	logger.Info(f.context.GetRuntimeContext(), "bulk request success, latency", latency.Milliseconds(), "logcount", len(logs), "tags", logGroup.LogTags, "routing", routing, "attempts", attempts)
+	return nil
+}
+
+func (f *FlusherElasticSearch) buildBody(serializedLogs [][]byte, values []map[string]string) string {
 	var builder strings.Builder
-	nowTime := time.Now().Local()
-	for index, log := range serializedLogs.([][]byte) {
+	current := time.Now().Local()
+	for index, log := range serializedLogs {
 		ESIndex := &f.Index
 		if f.isDynamicIndex {
 			valueMap := values[index]
-			ESIndex, err = fmtstr.FormatIndex(valueMap, f.Index, uint32(nowTime.Unix()))
+			var err error
+			ESIndex, err = fmtstr.FormatIndex(valueMap, f.Index, uint32(current.Unix()))
 			if err != nil {
 				logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch format index fail, error", err)
 				continue
@@ -247,52 +282,54 @@ func (f *FlusherElasticSearch) flushLogGroup(logGroup *protocol.LogGroup) {
 		builder.Write(log)
 		builder.WriteString("\n")
 	}
-	routing := ""
-	for _, tag := range logGroup.LogTags {
+	return builder.String()
+}
+
+func (f *FlusherElasticSearch) extractRouting(tags []*protocol.LogTag) string {
+	for _, tag := range tags {
 		if tag.Key == "__pack_id__" {
-			routing = tag.Value
-			break
+			return tag.Value
 		}
 	}
+	return ""
+}
 
+func (f *FlusherElasticSearch) flushLogGroup(body string, routing string) (bool, bool, error, time.Duration) {
 	req := esapi.BulkRequest{
-		Body:    strings.NewReader(builder.String()),
+		Body:    strings.NewReader(body),
 		Routing: routing,
 	}
 
-	var res *esapi.Response
-	var latency time.Duration
-	for attempt := 0; attempt <= f.MaxFlushRetries; attempt++ {
-		start := time.Now()
-		res, err = req.Do(context.Background(), f.esClient)
-		latency = time.Since(start)
-		if err != nil || res.StatusCode == 429 {
-			logger.Warning(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch error or too many requests, attempt", attempt+1)
-			if attempt < f.MaxFlushRetries {
-				time.Sleep(time.Millisecond * time.Duration(f.FlushIntervalMs*(attempt+1)))
-				req = esapi.BulkRequest{
-					Body:    strings.NewReader(builder.String()),
-					Routing: routing,
-				}
-				continue
-			}
-		}
-		break
-	}
-
+	start := time.Now()
+	res, err := req.Do(context.Background(), f.esClient)
+	latency := time.Since(start)
 	if err != nil {
-		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request fail after retries, error", err)
-		return
+		return false, false, err, latency
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusTooManyRequests || res.StatusCode >= http.StatusInternalServerError {
+		return false, true, errors.New(res.Status()), latency
+	} else if res.StatusCode >= http.StatusBadRequest {
+		return false, false, errors.New(res.Status()), latency
 	}
 
-	defer res.Body.Close()
-	if res.StatusCode >= 400 && res.StatusCode <= 499 {
-		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request client error", res)
-	} else if res.StatusCode >= 500 && res.StatusCode <= 599 {
-		logger.Error(f.context.GetRuntimeContext(), "FLUSHER_FLUSH_ALARM", "flush elasticsearch request server error", res)
-	} else {
-		logger.Info(f.context.GetRuntimeContext(), "log tags", logGroup.LogTags, "serialized logcount", len(serializedLogs.([][]byte)), "routing", routing, "latency", latency.Milliseconds())
+	return true, false, nil, latency
+}
+
+func (f *FlusherElasticSearch) getNextRetryDelay(retryTime int) time.Duration {
+	delay := f.Retry.InitialDelay * (1 << retryTime)
+	if delay > f.Retry.MaxDelay {
+		delay = f.Retry.MaxDelay
 	}
+
+	// apply about equaly distributed jitter in second half of the interval, such that the wait
+	// time falls into the interval [dur/2, dur]
+	harf := int64(delay / 2)
+	jitter, err := rand.Int(rand.Reader, big.NewInt(harf+1))
+	if err != nil {
+		return delay
+	}
+	return time.Duration(harf + jitter.Int64())
 }
 
 func init() {
