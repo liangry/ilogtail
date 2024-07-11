@@ -16,6 +16,7 @@ package reserve
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/alibaba/ilogtail/pkg/pipeline"
 	"github.com/alibaba/ilogtail/pkg/protocol"
@@ -59,6 +60,8 @@ func (p *ProcessorReserve) processLog(log *protocol.Log) {
 	result := make([]*protocol.Log_Content, 0, len(log.Contents))
 	for _, content := range log.Contents {
 		if _, exists := p.keyDictionary[content.Key]; exists {
+			result = append(result, content)
+		} else if strings.HasPrefix(content.Key, "__tag__") {
 			result = append(result, content)
 		}
 	}
