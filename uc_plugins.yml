@@ -1,0 +1,61 @@
+# Copyright 2023 iLogtail Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+plugins:
+  common:
+    - import: "github.com/alibaba/ilogtail/plugins/aggregator"
+    - import: "github.com/alibaba/ilogtail/plugins/aggregator/baseagg"
+    - import: "github.com/alibaba/ilogtail/plugins/aggregator/contentvaluegroup"
+    - import: "github.com/alibaba/ilogtail/plugins/aggregator/context"
+    - import: "github.com/alibaba/ilogtail/plugins/aggregator/logstorerouter"
+    - import: "github.com/alibaba/ilogtail/plugins/aggregator/metadatagroup"
+    - import: "github.com/alibaba/ilogtail/plugins/aggregator/shardhash"
+    - import: "github.com/alibaba/ilogtail/plugins/aggregator/skywalking"
+    - import: "github.com/alibaba/ilogtail/plugins/flusher/elasticsearch"
+    - import: "github.com/alibaba/ilogtail/plugins/flusher/sls"
+    - import: "github.com/alibaba/ilogtail/plugins/flusher/stdout"
+    - import: "github.com/alibaba/ilogtail/plugins/input/canal"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/addfields"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/anchor"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/appender"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/base64/decoding"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/base64/encoding"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/csv"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/cloudmeta"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/defaultone"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/desensitize"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/dictmap"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/drop"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/droplastkey"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/encrypt"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/fieldswithcondition"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/filter/keyregex"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/filter/regex"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/geoip"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/gotime"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/grok"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/json"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/md5"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/packjson"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/pickkey"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/regex"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/rename"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/reserve"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/split/char"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/split/keyvalue"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/split/logregex"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/split/logstring"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/split/string"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/strptime"
+    - import: "github.com/alibaba/ilogtail/plugins/processor/stringreplace"
